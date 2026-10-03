@@ -69,8 +69,8 @@ Verified against live Apple Maps with the default triggers (Noise + Crowds):
 | --- | --- | --- | --- | --- |
 | Murphy's Pub | Live | 5:44, 63 dB, walks Green St | 6:05, 57 dB | Avoids Green Street · 5 dB quieter · Fewer crowds |
 | Champaign Public Library | Live | 24 min, 63 dB | 28 min, 52 dB | 10 dB quieter · 3 fewer signalized crossings |
-| Memorial Stadium | 4:45 PM game | 28 min, 62 dB | 29 min, 58 dB | 4 dB quieter · Avoids busy roads |
-| State Farm Center | 4:45 PM game | 32 min | 34 min | Quieter · Avoids busy roads |
+| Memorial Stadium | 4:00 PM (game preset) | 28 min, 62 dB | 29 min, 58 dB | 4 dB quieter · Avoids busy roads |
+| State Farm Center | 4:00 PM (game preset) | 32 min | 34 min | Quieter · Avoids busy roads |
 | Joe's Brewery | Live | 8:47 | 9:09 | Fewer crowds |
 
 ## Files
