@@ -5,6 +5,7 @@ import Observation
 /// Owns the single environmental dataset. Builds the base field once off the main thread,
 /// keeps a snapshot for the current time (re-derived when an event starts or ends), and
 /// caches the heatmap overlays for every layer.
+@MainActor
 @Observable
 final class EnvironmentStore {
     static let shared = EnvironmentStore()

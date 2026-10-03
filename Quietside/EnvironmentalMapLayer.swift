@@ -4,6 +4,7 @@ import Observation
 
 // MARK: - Layer settings
 
+@MainActor
 @Observable
 final class MapLayerSettings {
     static let shared = MapLayerSettings()

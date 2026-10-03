@@ -4,6 +4,7 @@ import UserNotifications
 
 /// Local alerts 30 minutes before an event's area turns high-stimulation.
 /// Notification permission is only requested when the user turns a reminder on.
+@MainActor
 @Observable
 final class EventReminders: NSObject, UNUserNotificationCenterDelegate {
     static let shared = EventReminders()

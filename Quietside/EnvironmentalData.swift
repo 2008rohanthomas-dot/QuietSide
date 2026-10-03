@@ -5,7 +5,7 @@ import CoreLocation
 
 /// What the user finds overwhelming. Selected triggers weigh much more in Calmest routing
 /// and in the Overall map layer.
-nonisolated enum SensoryTrigger: String, Codable, CaseIterable, Identifiable, Sendable {
+enum SensoryTrigger: String, Codable, CaseIterable, Identifiable, Sendable {
     case noise, crowds, traffic, lights, visual
 
     var id: String { rawValue }
@@ -35,7 +35,7 @@ nonisolated enum SensoryTrigger: String, Codable, CaseIterable, Identifiable, Se
 
 /// Central configuration for the environmental model and the Calmest route cost.
 /// The map layers and route scoring both read these values.
-nonisolated enum EnvironmentalWeights {
+enum EnvironmentalWeights {
     /// AADT range mapped onto 0…1 on a log scale, so arterials do not swamp everything else.
     static let aadtFloor: Double = 300
     static let aadtCeiling: Double = 22_000
@@ -86,7 +86,7 @@ nonisolated enum EnvironmentalWeights {
 }
 
 /// Static pedestrian hubs that set the baseline crowd level around campus.
-nonisolated struct CrowdHub: Sendable {
+struct CrowdHub: Sendable {
     let name: String
     let coordinate: CLLocationCoordinate2D
     let radius: CLLocationDistance
@@ -107,7 +107,7 @@ nonisolated struct CrowdHub: Sendable {
 
 /// Persistent high-stimulation streets: full strength within `halfWidth` of the path,
 /// fading over `falloff` meters so the next parallel street stays calm.
-nonisolated struct StimulusCorridor: Sendable {
+struct StimulusCorridor: Sendable {
     let name: String
     let path: [CLLocationCoordinate2D]
     let halfWidth: CLLocationDistance
@@ -142,7 +142,7 @@ nonisolated struct StimulusCorridor: Sendable {
 
 // MARK: - Source records
 
-nonisolated struct RoadwaySegment: Sendable {
+struct RoadwaySegment: Sendable {
     let name: String
     let aadt: Double
     let coordinates: [CLLocationCoordinate2D]
@@ -156,7 +156,7 @@ nonisolated struct RoadwaySegment: Sendable {
     }
 }
 
-nonisolated struct ActivityLocation: Sendable {
+struct ActivityLocation: Sendable {
     let name: String
     let category: String
     let coordinate: CLLocationCoordinate2D
@@ -164,9 +164,9 @@ nonisolated struct ActivityLocation: Sendable {
     var weight: Double { EnvironmentalWeights.activityWeight(for: category) }
 }
 
-nonisolated struct EnvironmentalStimulus: Identifiable, Sendable {
-    nonisolated enum Kind: Sendable { case intersection, visual }
-    nonisolated enum Intensity: Sendable { case moderate, high }
+struct EnvironmentalStimulus: Identifiable, Sendable {
+    enum Kind: Sendable { case intersection, visual }
+    enum Intensity: Sendable { case moderate, high }
 
     let id: String
     let kind: Kind
@@ -177,7 +177,7 @@ nonisolated struct EnvironmentalStimulus: Identifiable, Sendable {
 
 // MARK: - Bundled datasets
 
-nonisolated enum EnvironmentalDataLoader {
+enum EnvironmentalDataLoader {
     static func roadways(bundle: Bundle = .main) -> [RoadwaySegment] {
         guard let url = bundle.url(forResource: "idot_aadt_campustown", withExtension: "geojson"),
               let data = try? Data(contentsOf: url),
@@ -211,13 +211,13 @@ nonisolated enum EnvironmentalDataLoader {
     }
 }
 
-private nonisolated struct RoadwayCollection: Decodable {
-    nonisolated struct Feature: Decodable {
-        nonisolated struct Geometry: Decodable {
+private struct RoadwayCollection: Decodable {
+    struct Feature: Decodable {
+        struct Geometry: Decodable {
             let type: String
             let coordinates: [[Double?]]
         }
-        nonisolated struct Properties: Decodable {
+        struct Properties: Decodable {
             let ROAD_NAME: String?
             let AADT: Double?
         }
@@ -227,13 +227,13 @@ private nonisolated struct RoadwayCollection: Decodable {
     let features: [Feature]
 }
 
-private nonisolated struct PlaceCollection: Decodable {
-    nonisolated struct Feature: Decodable {
-        nonisolated struct Geometry: Decodable {
+private struct PlaceCollection: Decodable {
+    struct Feature: Decodable {
+        struct Geometry: Decodable {
             let type: String
             let coordinates: [Double]
         }
-        nonisolated struct Properties: Decodable {
+        struct Properties: Decodable {
             let name: String?
             let category: String?
         }
@@ -248,7 +248,7 @@ private nonisolated struct PlaceCollection: Decodable {
 /// Static stimulus layer. Intersection coordinates are the crossing points of the
 /// corresponding roadway centerlines in the bundled AADT data; visual hotspots are the
 /// densest storefront/nightlife clusters in the bundled places data.
-nonisolated enum CampustownStimuli {
+enum CampustownStimuli {
     static let all: [EnvironmentalStimulus] = intersections + visual
 
     static let intersections: [EnvironmentalStimulus] = [

@@ -7,6 +7,7 @@ enum RouteError: Error {
 /// Fastest = least travel time. Calmest = least sensory cost, where
 /// cost = Σ time × (1 + weighted noise, crowd, traffic, lights, visual and event penalties),
 /// priced on the same environmental snapshot the heatmap draws.
+@MainActor
 struct RouteService {
     /// Apple walking directions per origin/destination pair. Re-pricing after a trigger or
     /// event change reuses them instead of spending the Directions rate limit.

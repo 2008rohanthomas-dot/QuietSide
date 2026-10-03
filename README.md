@@ -4,7 +4,7 @@ A SwiftUI walking-navigation app for lower-stimulation routes around UIUC Campus
 
 ## Open and run
 
-1. Open `Quietside.xcodeproj` in Xcode 27. The app runs on iOS 18 or later.
+1. Open `Quietside.xcodeproj` in Xcode 16 or later (verified with Xcode 16.1). The app runs on iOS 18 or later.
 2. Choose an iPhone simulator or device and press Run.
 3. Pick your sensory triggers, then search for a destination.
 

@@ -2,11 +2,11 @@ import Foundation
 import CoreLocation
 
 /// A scheduled campus event that raises environmental exposure around its area while active.
-nonisolated struct CampusEvent: Identifiable, Sendable {
-    nonisolated enum Status: Sendable { case upcoming, active, ended }
+struct CampusEvent: Identifiable, Sendable {
+    enum Status: Sendable { case upcoming, active, ended }
 
     /// Added on top of the base field while the event is active (0…1 each).
-    nonisolated struct Effects: Sendable {
+    struct Effects: Sendable {
         let crowd: Double
         let noise: Double
         let traffic: Double
@@ -64,7 +64,7 @@ nonisolated struct CampusEvent: Identifiable, Sendable {
     }
 }
 
-nonisolated enum CampusEventCatalog {
+enum CampusEventCatalog {
     static let centralTime = TimeZone(identifier: "America/Chicago")!
 
     /// Saturday, October 3, 2026 — Illinois Homecoming.

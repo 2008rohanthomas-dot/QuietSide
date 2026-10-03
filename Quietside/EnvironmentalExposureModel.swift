@@ -2,7 +2,7 @@ import Foundation
 import CoreLocation
 
 /// Equirectangular projection around Campustown. Accurate to well under a meter at this scale.
-nonisolated struct LocalProjection: Sendable {
+struct LocalProjection: Sendable {
     let origin: CLLocationCoordinate2D
     let metersPerDegreeLongitude: Double
     let metersPerDegreeLatitude: Double = 110_574
@@ -28,7 +28,7 @@ nonisolated struct LocalProjection: Sendable {
 }
 
 /// Regular raster of values in projected meters.
-nonisolated struct ExposureGrid: Sendable {
+struct ExposureGrid: Sendable {
     let originX: Double
     let originY: Double
     let cellSize: Double
@@ -73,7 +73,7 @@ nonisolated struct ExposureGrid: Sendable {
 // MARK: - Samples, layers, weights
 
 /// Environmental conditions at one point, as used by both the map and routing.
-nonisolated struct EnvironmentalSample: Sendable {
+struct EnvironmentalSample: Sendable {
     let noiseDb: Double
     let crowdLevel: Double
     let trafficLevel: Double
@@ -83,7 +83,7 @@ nonisolated struct EnvironmentalSample: Sendable {
     let activeEventIds: [String]
 }
 
-nonisolated enum EnvironmentalLayer: String, CaseIterable, Identifiable, Sendable {
+enum EnvironmentalLayer: String, CaseIterable, Identifiable, Sendable {
     case overall, noise, crowd, traffic
 
     var id: String { rawValue }
@@ -114,7 +114,7 @@ nonisolated enum EnvironmentalLayer: String, CaseIterable, Identifiable, Sendabl
 }
 
 /// Per-dimension cost weights derived from the user's triggers.
-nonisolated struct TriggerWeights: Sendable, Equatable {
+struct TriggerWeights: Sendable, Equatable {
     let noise: Double
     let crowds: Double
     let traffic: Double
@@ -154,7 +154,7 @@ nonisolated struct TriggerWeights: Sendable, Equatable {
 }
 
 /// Environmental exposure and Calmest cost along one route.
-nonisolated struct RouteExposure: Sendable {
+struct RouteExposure: Sendable {
     let averageNoiseDb: Double
     let peakNoiseDb: Double
     let averageCrowd: Double
@@ -174,7 +174,7 @@ nonisolated struct RouteExposure: Sendable {
 }
 
 /// One stretch of a route, valued on the same grids as the heatmap.
-nonisolated struct RouteExposureSegment: Sendable {
+struct RouteExposureSegment: Sendable {
     let coordinates: [CLLocationCoordinate2D]
     /// Normalized 0…1 values.
     let noise: Double
@@ -192,8 +192,8 @@ nonisolated struct RouteExposureSegment: Sendable {
     }
 }
 
-nonisolated struct ExposureContourBand: Sendable {
-    nonisolated struct Polygon: Sendable {
+struct ExposureContourBand: Sendable {
+    struct Polygon: Sendable {
         let exterior: [CLLocationCoordinate2D]
         let holes: [[CLLocationCoordinate2D]]
     }
@@ -207,7 +207,7 @@ nonisolated struct ExposureContourBand: Sendable {
 /// Static environmental field for Campustown built from the bundled datasets:
 /// IDOT AADT roadways → traffic; venues + pedestrian hubs → crowd; hotspots → visual;
 /// signalized intersections → signal exposure. Events are layered on per `snapshot(at:)`.
-nonisolated final class EnvironmentalExposureModel: Sendable {
+final class EnvironmentalExposureModel: Sendable {
     static let bandThresholds: [Double] = [0.2, 0.35, 0.5, 0.66, 0.82]
 
     let projection: LocalProjection
@@ -423,7 +423,7 @@ nonisolated final class EnvironmentalExposureModel: Sendable {
 // MARK: - Snapshot
 
 /// Environmental channels at one moment. Every map layer and every route cost reads these grids.
-nonisolated final class EnvironmentSnapshot: Sendable {
+final class EnvironmentSnapshot: Sendable {
     let base: EnvironmentalExposureModel
     let date: Date
     let activeEvents: [CampusEvent]
@@ -734,7 +734,7 @@ nonisolated final class EnvironmentSnapshot: Sendable {
 }
 
 /// Binary min-heap keyed by distance, for the corridor search.
-nonisolated struct MinHeap {
+struct MinHeap {
     private var items: [(Double, Int)] = []
 
     mutating func push(_ key: Double, _ value: Int) {
@@ -770,14 +770,14 @@ nonisolated struct MinHeap {
 
 /// Marching-squares iso-contours of the exposure raster, assembled into polygons with holes,
 /// simplified and smoothed for display.
-private nonisolated struct Ring {
+private struct Ring {
     let points: [SIMD2<Double>]
     let area: Double
     let minP: SIMD2<Double>
     let maxP: SIMD2<Double>
 }
 
-nonisolated enum ContourTracer {
+enum ContourTracer {
     static func polygons(in grid: ExposureGrid, threshold t: Double, projection: LocalProjection) -> [ExposureContourBand.Polygon] {
         let nx = grid.columns, ny = grid.rows
         var adjacency: [Int: [Int]] = [:]
