@@ -58,7 +58,7 @@ enum CampusOrigin {
     static let cif = Place(
         id: "cif",
         name: "CIF",
-        subtitle: "Campus Instructional Facility · 1405 W Springfield Ave",
+        subtitle: "Campus Instructional Facility · 1405 W Springfield Ave, Urbana · UIUC",
         latitude: 40.11246,
         longitude: -88.22832
     )

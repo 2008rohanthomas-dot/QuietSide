@@ -64,8 +64,8 @@ struct HomeView: View {
                 Circle().fill(QSColor.routeFast).frame(width: 10, height: 10)
                     .overlay(Circle().stroke(.white, lineWidth: 2))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("From CIF").font(.subheadline.weight(.semibold))
-                    Text("1405 W Springfield Ave").font(.caption).foregroundStyle(.secondary)
+                    Text("From Campus Instructional Facility").font(.subheadline.weight(.semibold))
+                    Text("CIF · 1405 W Springfield Ave · UIUC").font(.caption).foregroundStyle(.secondary)
                 }
             }
 
