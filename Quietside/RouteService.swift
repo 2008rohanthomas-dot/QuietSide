@@ -197,6 +197,9 @@ enum RouteComparison {
         if calm.intersections.count < fastest.intersections.count {
             reasons.append("\(fastest.intersections.count - calm.intersections.count) fewer signalized crossings")
         }
+        if let street = fastest.corridors.first(where: { !calm.corridors.contains($0) }) {
+            reasons.insert("Avoids \(street)", at: 0)
+        }
         let avoided = fastest.eventIds.filter { !calm.eventIds.contains($0) }
         if let event = CampusEventCatalog.all.first(where: { avoided.contains($0.id) }) {
             reasons.append("Avoids \(event.name)")

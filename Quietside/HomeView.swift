@@ -52,6 +52,14 @@ struct HomeView: View {
 
     private var bottomCard: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let event = CampusEventCatalog.headline(at: environment.now), searchService.results.isEmpty {
+                EventAlertBanner(event: event, now: environment.now) {
+                    withAnimation {
+                        camera = .region(MKCoordinateRegion(center: event.center, latitudinalMeters: 1_400, longitudinalMeters: 1_400))
+                    }
+                }
+            }
+
             HStack(spacing: 10) {
                 Circle().fill(QSColor.routeFast).frame(width: 10, height: 10)
                     .overlay(Circle().stroke(.white, lineWidth: 2))
@@ -162,6 +170,9 @@ private struct EventList: View {
                         }
                         Spacer(minLength: 4)
                         StatusPill(status: event.status(at: store.now))
+                        if event.status(at: Date()) == .upcoming {
+                            ReminderBell(event: event)
+                        }
                     }
                     .contentShape(Rectangle())
                 }
@@ -186,5 +197,58 @@ private struct StatusPill: View {
             .foregroundStyle(status == .active ? .white : color)
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(status == .active ? AnyShapeStyle(color) : AnyShapeStyle(Color.primary.opacity(0.07)), in: Capsule())
+    }
+}
+
+/// The live event, or the next one, with its intensity and timing.
+private struct EventAlertBanner: View {
+    let event: CampusEvent
+    let now: Date
+    let action: () -> Void
+
+    var body: some View {
+        let live = event.status(at: now) == .active
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: live ? "exclamationmark.triangle.fill" : "clock.badge.exclamationmark")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(live ? QSColor.coral : ExposurePalette.event, in: RoundedRectangle(cornerRadius: 11))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("\(event.intensityLabel) stimulation · \(event.area)")
+                        .font(.subheadline.weight(.bold))
+                        .lineLimit(1)
+                    Text(live
+                         ? "\(event.name) · until \(event.end.formatted(CampusEventCatalog.timeStyle))"
+                         : "\(event.name) · \(event.start.formatted(CampusEventCatalog.timeStyle)), \(event.countdown(from: now))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(10)
+            .background((live ? QSColor.coral : ExposurePalette.event).opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct ReminderBell: View {
+    let event: CampusEvent
+    @State private var reminders = EventReminders.shared
+
+    var body: some View {
+        Button {
+            Task { await reminders.toggle(event) }
+        } label: {
+            Image(systemName: reminders.isOn(event) ? "bell.fill" : "bell")
+                .font(.subheadline)
+                .foregroundStyle(reminders.isOn(event) ? ExposurePalette.event : .secondary)
+                .frame(width: 30, height: 30)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(reminders.isOn(event) ? "Cancel reminder" : "Remind me")
     }
 }

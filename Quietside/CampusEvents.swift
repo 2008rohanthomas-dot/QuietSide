@@ -24,6 +24,25 @@ nonisolated struct CampusEvent: Identifiable, Sendable {
     let effects: Effects
     let symbol: String
 
+    /// "Extreme" or "High", from the strongest effect.
+    var intensityLabel: String {
+        max(effects.crowd, effects.noise) >= 0.95 ? "Extreme" : "High"
+    }
+
+    /// True when any point of the path is inside the event's strong-influence area.
+    func touches(_ path: [CLLocationCoordinate2D]) -> Bool {
+        let center = CLLocation(latitude: self.center.latitude, longitude: self.center.longitude)
+        return path.contains {
+            influence(atDistance: center.distance(from: CLLocation(latitude: $0.latitude, longitude: $0.longitude))) > 0.3
+        }
+    }
+
+    /// "in 2h 10m" / "in 25 min".
+    func countdown(from date: Date) -> String {
+        let minutes = max(0, Int(start.timeIntervalSince(date) / 60))
+        return minutes >= 60 ? "in \(minutes / 60)h \(minutes % 60)m" : "in \(minutes) min"
+    }
+
     func status(at date: Date) -> Status {
         if date < start { return .upcoming }
         if date < end { return .active }
@@ -90,6 +109,13 @@ nonisolated enum CampusEventCatalog {
         var style = Date.FormatStyle(date: .omitted, time: .shortened)
         style.timeZone = centralTime
         return style
+    }
+
+    /// The live event, else the next one starting within `horizon`.
+    static func headline(at date: Date, horizon: TimeInterval = 4 * 3600) -> CampusEvent? {
+        all.first { $0.status(at: date) == .active }
+            ?? all.filter { $0.status(at: date) == .upcoming && $0.start.timeIntervalSince(date) <= horizon }
+                .min { $0.start < $1.start }
     }
 
     static func active(at date: Date) -> [CampusEvent] {

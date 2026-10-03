@@ -98,8 +98,20 @@ struct EnvironmentalMapLayer: MapContent {
                         .foregroundStyle(ExposurePalette.event.opacity(0.12))
                         .stroke(ExposurePalette.event.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
                 }
+                if !active, event.start.timeIntervalSince(store.now) <= 4 * 3600 {
+                    MapCircle(center: event.center, radius: event.radius)
+                        .foregroundStyle(ExposurePalette.event.opacity(0.04))
+                        .stroke(ExposurePalette.event.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [3, 5]))
+                }
                 Annotation(event.area, coordinate: event.center, anchor: .center) {
-                    EventMarker(event: event, active: active)
+                    VStack(spacing: 3) {
+                        EventMarker(event: event, active: active)
+                        Text(active ? "Live" : event.start.formatted(CampusEventCatalog.timeStyle))
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(active ? .white : ExposurePalette.event)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(active ? AnyShapeStyle(ExposurePalette.event) : AnyShapeStyle(.thickMaterial), in: Capsule())
+                    }
                 }
                 .annotationTitles(.hidden)
             }

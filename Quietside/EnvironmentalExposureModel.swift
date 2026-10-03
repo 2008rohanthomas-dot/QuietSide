@@ -163,6 +163,8 @@ nonisolated struct RouteExposure: Sendable {
     let highExposureShare: Double
     let intersections: [EnvironmentalStimulus]
     let eventIds: [String]
+    /// Seeded high-stimulation corridors the route walks along (e.g. "Green Street").
+    let corridors: [String]
     /// Overall exposure resampled at even intervals from start to destination.
     let profile: [Double]
     /// Consecutive ~30 m pieces of the route with their environmental values, for drawing.
@@ -213,6 +215,9 @@ nonisolated final class EnvironmentalExposureModel: Sendable {
     let crowd: ExposureGrid
     let visual: ExposureGrid
     let signal: ExposureGrid
+    /// Persistent street-activity noise from seeded corridors, 0…1.
+    let streetNoise: ExposureGrid
+    let corridors: [StimulusCorridor]
     let stimuli: [EnvironmentalStimulus]
     let streetAnchors: [SIMD2<Double>]
 
@@ -223,7 +228,8 @@ nonisolated final class EnvironmentalExposureModel: Sendable {
             roadways: roadways,
             activityLocations: EnvironmentalDataLoader.activityLocations(),
             stimuli: CampustownStimuli.all,
-            hubs: CrowdHub.campus
+            hubs: CrowdHub.campus,
+            corridors: StimulusCorridor.campus
         )
     }
 
@@ -232,6 +238,7 @@ nonisolated final class EnvironmentalExposureModel: Sendable {
         activityLocations: [ActivityLocation],
         stimuli: [EnvironmentalStimulus],
         hubs: [CrowdHub],
+        corridors: [StimulusCorridor] = [],
         cellSize: Double = 12,
         margin: Double = 250
     ) {
@@ -337,15 +344,41 @@ nonisolated final class EnvironmentalExposureModel: Sendable {
             }
         }
 
+        // Seeded high-stimulation corridors.
+        var corridorCrowd = empty, corridorNoise = empty, corridorVisual = empty
+        for corridor in corridors {
+            let reach = corridor.halfWidth + corridor.falloff * 3.5
+            let points = corridor.path.map(projection.point)
+            for (a, b) in zip(points, points.dropFirst()) {
+                let c0 = max(0, Int((min(a.x, b.x) - reach - originX) / cellSize))
+                let c1 = min(columns - 1, Int((max(a.x, b.x) + reach - originX) / cellSize) + 1)
+                let r0 = max(0, Int((min(a.y, b.y) - reach - originY) / cellSize))
+                let r1 = min(rows - 1, Int((max(a.y, b.y) + reach - originY) / cellSize) + 1)
+                guard c0 <= c1, r0 <= r1 else { continue }
+                for row in r0...r1 {
+                    for column in c0...c1 {
+                        let d = Self.distance(from: empty.center(column: column, row: row), toSegment: a, b)
+                        guard d <= reach else { continue }
+                        let beyond = max(0, d - corridor.halfWidth) / corridor.falloff
+                        let influence = exp(-0.5 * beyond * beyond)
+                        let index = row * columns + column
+                        corridorCrowd.values[index] = max(corridorCrowd.values[index], Float(corridor.crowd * influence))
+                        corridorNoise.values[index] = max(corridorNoise.values[index], Float(corridor.noise * influence))
+                        corridorVisual.values[index] = max(corridorVisual.values[index], Float(corridor.visual * influence))
+                    }
+                }
+            }
+        }
+
         let crowd = empty.mapped { index -> Float in
             let activity: Double = 1 - exp(logQuietActivity[index])
-            let quiet: Double = (1 - 0.75 * activity) * exp(logQuietHubs[index])
+            let quiet: Double = (1 - 0.75 * activity) * exp(logQuietHubs[index]) * (1 - Double(corridorCrowd.values[index]))
             return Float(1 - quiet)
         }
         let visual = empty.mapped { index -> Float in
             let activity: Double = 1 - exp(logQuietActivity[index])
             let road: Double = 1 - 0.15 * Double(traffic.values[index])
-            let quiet: Double = hotspotQuiet[index] * (1 - 0.45 * activity) * road
+            let quiet: Double = hotspotQuiet[index] * (1 - 0.45 * activity) * road * (1 - Double(corridorVisual.values[index]))
             return Float(1 - quiet)
         }
 
@@ -364,6 +397,8 @@ nonisolated final class EnvironmentalExposureModel: Sendable {
         self.crowd = crowd
         self.visual = visual
         self.signal = signal
+        self.streetNoise = corridorNoise
+        self.corridors = corridors
         self.stimuli = stimuli
         self.streetAnchors = anchors
     }
@@ -443,7 +478,8 @@ nonisolated final class EnvironmentSnapshot: Sendable {
             let road: Double = 1 - 0.85 * Double(finalTraffic.values[index])
             let people: Double = 1 - 0.35 * Double(finalCrowd.values[index])
             let events: Double = 1 - Double(eventNoise[index])
-            return Float(1 - road * people * events)
+            let street: Double = 1 - Double(base.streetNoise.values[index])
+            return Float(1 - road * people * events * street)
         }
         self.crowd = crowd
         self.traffic = traffic
@@ -522,7 +558,7 @@ nonisolated final class EnvironmentSnapshot: Sendable {
         guard points.count >= 2, totalLength > 0 else {
             return RouteExposure(averageNoiseDb: EnvironmentalWeights.ambientNoiseDb, peakNoiseDb: EnvironmentalWeights.ambientNoiseDb,
                                  averageCrowd: 0, averageTraffic: 0, averageVisual: 0, highExposureShare: 0,
-                                 intersections: [], eventIds: [], profile: [], segments: [], cost: travelTime)
+                                 intersections: [], eventIds: [], corridors: [], profile: [], segments: [], cost: travelTime)
         }
 
         let spacing = EnvironmentalWeights.routeSampleSpacing
@@ -608,6 +644,16 @@ nonisolated final class EnvironmentSnapshot: Sendable {
             highExposureShare: Double(high) / n,
             intersections: intersections,
             eventIds: activeEvents.map(\.id).filter(eventIds.contains),
+            corridors: base.corridors.filter { corridor in
+                // Counts when at least ~60 m of the route runs inside the corridor's core.
+                let path = corridor.path.map(projection.point)
+                let inside = points.filter { p in
+                    zip(path, path.dropFirst()).contains {
+                        EnvironmentalExposureModel.distance(from: p, toSegment: $0, $1) <= corridor.halfWidth
+                    }
+                }
+                return inside.count >= 2 && zip(inside, inside.dropFirst()).reduce(0) { $0 + EnvironmentalExposureModel.length($1.1 - $1.0) } >= 60
+            }.map(\.name),
             profile: profile,
             segments: segments,
             cost: cost

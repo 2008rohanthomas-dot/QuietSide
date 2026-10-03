@@ -105,6 +105,41 @@ nonisolated struct CrowdHub: Sendable {
     ]
 }
 
+/// Persistent high-stimulation streets: full strength within `halfWidth` of the path,
+/// fading over `falloff` meters so the next parallel street stays calm.
+nonisolated struct StimulusCorridor: Sendable {
+    let name: String
+    let path: [CLLocationCoordinate2D]
+    let halfWidth: CLLocationDistance
+    let falloff: CLLocationDistance
+    let crowd: Double
+    let noise: Double
+    let visual: Double
+
+    static let campus: [StimulusCorridor] = [
+        // Campustown's Green Street strip: storefronts, bars, buses, constant foot traffic.
+        StimulusCorridor(
+            name: "Green Street",
+            path: [
+                .init(latitude: 40.110334, longitude: -88.228898),  // Wright
+                .init(latitude: 40.110310, longitude: -88.230391),  // Sixth
+                .init(latitude: 40.110288, longitude: -88.233576),  // Fourth
+                .init(latitude: 40.110237, longitude: -88.238716)   // First
+            ],
+            halfWidth: 22, falloff: 28, crowd: 0.85, noise: 0.6, visual: 0.75
+        ),
+        // Green Street east of Wright, past the Illini Union.
+        StimulusCorridor(
+            name: "Green Street",
+            path: [
+                .init(latitude: 40.110334, longitude: -88.228898),
+                .init(latitude: 40.110420, longitude: -88.225800)
+            ],
+            halfWidth: 18, falloff: 25, crowd: 0.55, noise: 0.35, visual: 0.4
+        )
+    ]
+}
+
 // MARK: - Source records
 
 nonisolated struct RoadwaySegment: Sendable {

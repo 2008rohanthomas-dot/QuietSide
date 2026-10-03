@@ -47,7 +47,8 @@ struct RouteComparisonView: View {
                                 candidate: candidate,
                                 fastest: fastest,
                                 layer: layers.layer,
-                                selected: selected?.kind == candidate.kind
+                                selected: selected?.kind == candidate.kind,
+                                now: environment.now
                             ) {
                                 withAnimation(.easeInOut(duration: 0.2)) { selectedKind = candidate.kind }
                             }
@@ -119,6 +120,7 @@ private struct RouteOptionCard: View {
     let fastest: RouteCandidate?
     let layer: EnvironmentalLayer
     let selected: Bool
+    let now: Date
     let action: () -> Void
 
     private var exposure: RouteExposure { candidate.exposure }
@@ -149,8 +151,17 @@ private struct RouteOptionCard: View {
 
                 if !exposure.eventIds.isEmpty,
                    let event = CampusEventCatalog.all.first(where: { exposure.eventIds.contains($0.id) }) {
-                    Label("Passes \(event.name)", systemImage: event.symbol)
+                    Label("Passes \(event.name) · \(event.intensityLabel.lowercased()) now", systemImage: event.symbol)
                         .font(.caption.weight(.semibold)).foregroundStyle(ExposurePalette.event)
+                }
+
+                if let upcoming = CampusEventCatalog.all.first(where: {
+                    $0.status(at: now) == .upcoming && $0.start.timeIntervalSince(now) <= 4 * 3600
+                        && $0.touches(PolylineGeometry.coordinates(of: candidate.route.polyline))
+                }) {
+                    Label("\(upcoming.area) turns \(upcoming.intensityLabel.lowercased()) at \(upcoming.start.formatted(CampusEventCatalog.timeStyle))",
+                          systemImage: "clock.badge.exclamationmark")
+                        .font(.caption.weight(.semibold)).foregroundStyle(QSColor.amber)
                 }
 
                 if candidate.kind == .calmest {

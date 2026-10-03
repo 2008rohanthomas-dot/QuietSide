@@ -38,6 +38,7 @@ All weights live in `EnvironmentalWeights` (`EnvironmentalData.swift`).
 | traffic | IDOT AADT roadway volumes (`Data/idot_aadt_campustown.geojson`) |
 | crowd | Campustown venues (`Data/campustown_places.geojson`) + seeded pedestrian hubs (`CrowdHub`) |
 | visual | Seeded storefront/nightlife hotspots + venue density |
+| corridor boost | Seeded Green Street strip, Wright → First (`StimulusCorridor`): crowd 0.85, noise 0.6, visual 0.75, fading within ~1 block |
 | trafficSignalExposure | Seeded signalized intersections (`CampustownStimuli`) |
 | noiseDb | Derived from traffic, crowd and event noise |
 
@@ -52,6 +53,25 @@ All weights live in `EnvironmentalWeights` (`EnvironmentalData.swift`).
 | Homecoming Saturday Night LIVE | 6:00–9:00 PM | Downtown Champaign |
 
 Status (Upcoming → Live → Ended) is derived from the clock. While an event is live, its area gets higher crowd, noise, traffic and visual values. Those raise route costs nearby, so Calmest can steer around it.
+
+## Event alerts
+
+- Explore shows the live event, or the next one within 4 hours, with its intensity ("Extreme" for the game) and a countdown.
+- The map labels each event with its start time and draws a faint ring around upcoming event areas.
+- Route cards warn when a route passes an area that turns high-stimulation soon.
+- The bell on an upcoming event schedules a local reminder 30 minutes before it starts. Notification permission is requested only on that tap.
+
+## Suggested demo routes from CIF
+
+Verified against live Apple Maps with the default triggers (Noise + Crowds):
+
+| Destination (search) | Clock | Fastest | Calmest | Shown reason |
+| --- | --- | --- | --- | --- |
+| Murphy's Pub | Live | 5:44, 63 dB, walks Green St | 6:05, 57 dB | Avoids Green Street · 5 dB quieter · Fewer crowds |
+| Champaign Public Library | Live | 24 min, 63 dB | 28 min, 52 dB | 10 dB quieter · 3 fewer signalized crossings |
+| Memorial Stadium | 4:45 PM game | 28 min, 62 dB | 29 min, 58 dB | 4 dB quieter · Avoids busy roads |
+| State Farm Center | 4:45 PM game | 32 min | 34 min | Quieter · Avoids busy roads |
+| Joe's Brewery | Live | 8:47 | 9:09 | Fewer crowds |
 
 ## Files
 
