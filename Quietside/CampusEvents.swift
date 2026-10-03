@@ -39,6 +39,10 @@ nonisolated struct CampusEvent: Identifiable, Sendable {
     }
 
     var reach: CLLocationDistance { radius + radius * 0.55 * 3 }
+
+    var timeRange: String {
+        "\(start.formatted(CampusEventCatalog.timeStyle))–\(end.formatted(CampusEventCatalog.timeStyle))"
+    }
 }
 
 nonisolated enum CampusEventCatalog {
@@ -80,6 +84,13 @@ nonisolated enum CampusEventCatalog {
             symbol: "music.mic"
         )
     ]
+
+    /// "3:15 PM" in Central Time.
+    static var timeStyle: Date.FormatStyle {
+        var style = Date.FormatStyle(date: .omitted, time: .shortened)
+        style.timeZone = centralTime
+        return style
+    }
 
     static func active(at date: Date) -> [CampusEvent] {
         all.filter { $0.status(at: date) == .active }

@@ -10,19 +10,16 @@ enum QSColor {
     static let coral = Color(red: 0.79, green: 0.32, blue: 0.26)
     static let routeFast = Color(red: 0.24, green: 0.40, blue: 0.63)
 
-    static let routeAlternative = Color(red: 0.42, green: 0.47, blue: 0.53)
-
     static func route(_ kind: RouteKind) -> Color {
         switch kind {
         case .calmest: moss
         case .fastest: routeFast
-        case .alternative: routeAlternative
         }
     }
 
-    static func level(_ level: SensoryLevel) -> Color {
+    static func level(_ level: ExposureLevel) -> Color {
         switch level {
-        case .calm: moss
+        case .low: moss
         case .moderate: amber
         case .high: coral
         }
@@ -46,70 +43,16 @@ extension View {
     func quietCard() -> some View { modifier(QuietCardModifier()) }
 }
 
-struct CalmBadge: View {
-    let score: Double?
-
-    var body: some View {
-        if let score {
-            let level = SensoryLevel(score: score)
-            Label(level.rawValue, systemImage: level == .calm ? "leaf.fill" : "circle.lefthalf.filled")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(QSColor.level(level))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(QSColor.level(level).opacity(0.12), in: Capsule())
-                .accessibilityLabel("Known-signal exposure: \(level.rawValue)")
-        } else {
-            Label("Unknown", systemImage: "questionmark.circle")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.secondary.opacity(0.12), in: Capsule())
-        }
-    }
-}
-
 struct PrimaryButtonStyle: ButtonStyle {
+    var color: Color = QSColor.moss
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.headline)
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
-            .background(QSColor.moss.opacity(configuration.isPressed ? 0.78 : 1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(color.opacity(configuration.isPressed ? 0.78 : 1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
-    }
-}
-
-struct SensoryEvidenceList: View {
-    let sensory: RouteSensory
-
-    var body: some View {
-        VStack(spacing: 12) {
-            ForEach(sensory.signals) { signal in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 10) {
-                        Image(systemName: signal.symbol)
-                            .foregroundStyle(signal.level.map(QSColor.level) ?? Color.secondary)
-                            .frame(width: 22)
-                        Text(signal.title).font(.subheadline.weight(.semibold))
-                        Spacer()
-                        Text(signal.displayValue)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(signal.level.map(QSColor.level) ?? Color.secondary)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    Text(signal.detail).font(.caption2).foregroundStyle(.secondary)
-                    if let source = signal.source {
-                        Link(destination: source.url) {
-                            Label("\(source.publisher) · \(signal.kind.rawValue)", systemImage: "arrow.up.right.square")
-                                .font(.caption2.weight(.medium))
-                        }
-                    }
-                }
-                if signal.id != sensory.signals.last?.id { Divider() }
-            }
-        }
     }
 }

@@ -4,144 +4,135 @@ import UIKit
 
 struct ActiveNavigationView: View {
     let place: Place
-    let profile: SensoryProfile
-    let locationService: LocationService
     @State private var session: NavigationSession
-    @State private var camera: MapCameraPosition = .userLocation(followsHeading: true, fallback: .automatic)
-    @State private var showEndConfirmation = false
+    @State private var camera: MapCameraPosition
+    @State private var following = true
     @State private var environment = EnvironmentStore.shared
     @State private var layers = MapLayerSettings.shared
     @Environment(\.dismiss) private var dismiss
 
-    init(candidate: RouteCandidate, place: Place, profile: SensoryProfile, locationService: LocationService) {
+    init(candidate: RouteCandidate, place: Place) {
         self.place = place
-        self.profile = profile
-        self.locationService = locationService
         _session = State(initialValue: NavigationSession(candidate: candidate))
+        _camera = State(initialValue: .camera(MapCamera(centerCoordinate: CampusOrigin.cif.coordinate, distance: 650)))
     }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Map(position: $camera) {
                 EnvironmentalMapLayer(store: environment, settings: layers, fieldOpacity: 0.75)
-                MapPolyline(session.candidate.route.polyline)
-                    .stroke(.white, style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
-                MapPolyline(session.candidate.route.polyline)
-                    .stroke(
-                        QSColor.route(session.candidate.kind),
-                        style: StrokeStyle(lineWidth: 8, lineCap: .round, lineJoin: .round)
-                    )
-                UserAnnotation()
+                ExposureRouteLine(candidate: session.candidate, layer: layers.layer)
+                Annotation("CIF", coordinate: CampusOrigin.cif.coordinate) {
+                    Circle().fill(.white).frame(width: 10, height: 10)
+                        .overlay(Circle().stroke(QSColor.routeFast, lineWidth: 3))
+                }
+                .annotationTitles(.hidden)
+                Annotation("You", coordinate: session.position, anchor: .center) { OriginMarker() }
+                    .annotationTitles(.hidden)
                 Marker(place.name, coordinate: place.coordinate).tint(QSColor.moss)
             }
             .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll))
+            .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in following = false })
             .ignoresSafeArea(edges: .bottom)
-            .task { await environment.load() }
-            .overlay(alignment: .topTrailing) {
-                Button {
-                    camera = .userLocation(followsHeading: true, fallback: .automatic)
-                } label: {
-                    Image(systemName: "location.north.fill")
-                        .font(.headline)
-                        .padding(12)
-                        .background(.thickMaterial, in: Circle())
+            .overlay(alignment: .top) {
+                HStack(alignment: .top) {
+                    LayerPicker(settings: layers)
+                    Spacer()
+                    if !following {
+                        Button {
+                            following = true
+                            follow()
+                        } label: { MapControlIcon(systemImage: "location.fill") }
+                        .accessibilityLabel("Recenter")
+                    }
                 }
-                .padding()
-                .accessibilityLabel("Recenter and follow heading")
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
             }
 
-            VStack(spacing: 12) {
-                navigationCard
-                Button("End route", role: .destructive) { showEndConfirmation = true }
-                    .font(.subheadline.weight(.semibold))
-            }
-            .padding(16)
+            navigationCard.padding(16)
         }
         .navigationBarBackButtonHidden()
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Label(
-                    "\(session.candidate.kind.rawValue) route",
-                    systemImage: session.candidate.kind == .calmest ? "leaf.fill" : "bolt.fill"
-                )
-                .font(.subheadline.weight(.semibold))
+                Label(session.candidate.kind.rawValue, systemImage: session.candidate.kind.symbol)
+                    .font(.subheadline.weight(.semibold))
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("End") {
+                    session.stop()
+                    dismiss()
+                }
+                .fontWeight(.semibold)
             }
         }
-        .onAppear {
-            locationService.startNavigationUpdates()
-            if let location = locationService.latestLocation { session.update(with: location) }
-        }
-        .onChange(of: locationService.latestLocation?.timestamp) { _, _ in
-            guard let location = locationService.latestLocation else { return }
-            session.update(with: location)
-            if session.arrived { UINotificationFeedbackGenerator().notificationOccurred(.success) }
-        }
-        .task(id: session.rerouteGeneration) {
-            guard session.rerouteGeneration > 0,
-                  let location = locationService.latestLocation else { return }
-            await session.reroute(from: location, to: place.mapItem, profile: profile)
-        }
-        .onDisappear { locationService.stop() }
-        .confirmationDialog("End this route?", isPresented: $showEndConfirmation) {
-            Button("End route", role: .destructive) {
-                locationService.stop()
-                dismiss()
-            }
-            Button("Keep walking", role: .cancel) {}
+        .onAppear { session.start() }
+        .onDisappear { session.stop() }
+        .onChange(of: session.travelled) { _, _ in if following { follow() } }
+        .onChange(of: session.arrived) { _, arrived in
+            if arrived { UINotificationFeedbackGenerator().notificationOccurred(.success) }
         }
     }
 
+    private func follow() {
+        camera = .camera(MapCamera(centerCoordinate: session.position, distance: 650))
+    }
+
     private var navigationCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if session.isRerouting {
-                Label("Rerouting from your current position…", systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(QSColor.amber)
-            }
-
-            HStack(alignment: .top) {
-                Image(systemName: instructionSymbol)
-                    .font(.title.bold()).foregroundStyle(QSColor.moss)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 14) {
+                Image(systemName: session.arrived ? "checkmark" : maneuverSymbol)
+                    .font(.title2.bold()).foregroundStyle(.white)
                     .frame(width: 52, height: 52)
-                    .background(QSColor.sage.opacity(0.55), in: RoundedRectangle(cornerRadius: 16))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(distanceToManeuver).font(.caption.weight(.bold)).foregroundStyle(.secondary)
-                    Text(instruction).font(.title3.bold())
+                    .background(QSColor.route(session.candidate.kind), in: RoundedRectangle(cornerRadius: 16))
+                VStack(alignment: .leading, spacing: 2) {
+                    if !session.arrived, let step = session.currentStep {
+                        Text(DistanceText.string(meters: step.remaining))
+                            .font(.subheadline.weight(.bold)).foregroundStyle(.secondary)
+                    }
+                    Text(instruction).font(.title3.bold()).lineLimit(2)
                 }
-                Spacer()
+                Spacer(minLength: 0)
             }
 
-            ProgressView(value: session.progress?.fractionComplete ?? 0).tint(QSColor.moss)
+            ProgressView(value: session.fractionComplete).tint(QSColor.route(session.candidate.kind))
 
-            if locationService.latestLocation == nil {
-                Label("Waiting for an accurate GPS fix", systemImage: "location.circle")
-                    .font(.subheadline).foregroundStyle(QSColor.amber)
-            } else if case .poor = locationService.quality {
-                Label(locationService.quality.label, systemImage: "location.slash.circle")
-                    .font(.caption).foregroundStyle(QSColor.amber)
-            }
-
-            if session.progress?.isOffRoute == true {
-                Label("You appear to be off route", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption.weight(.semibold)).foregroundStyle(QSColor.amber)
+            if let sample = environment.snapshot?.sample(at: session.position) {
+                HStack(spacing: 8) {
+                    LiveMetric(symbol: "speaker.wave.2.fill", text: "\(Int(sample.noiseDb.rounded())) dB",
+                               value: (sample.noiseDb - EnvironmentalWeights.ambientNoiseDb) / EnvironmentalWeights.noiseRangeDb)
+                    LiveMetric(symbol: "person.3.fill", text: ExposureLevel(sample.crowdLevel).rawValue, value: sample.crowdLevel)
+                    LiveMetric(symbol: "car.fill", text: ExposureLevel(sample.trafficLevel).rawValue, value: sample.trafficLevel)
+                }
+                if let event = CampusEventCatalog.all.first(where: { sample.activeEventIds.contains($0.id) }) {
+                    Label("Near \(event.name)", systemImage: event.symbol)
+                        .font(.caption.weight(.semibold)).foregroundStyle(ExposurePalette.event)
+                }
             }
 
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(remainingTime).font(.headline)
-                    Text("\(remainingDistance) · to \(place.name)")
+                    Text("\(max(1, Int(ceil(session.remainingTime / 60)))) min").font(.headline)
+                    Text(DistanceText.string(meters: session.remainingDistance))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if session.arrived {
-                    Button("Finish") { dismiss() }
+                    Button("Done") { dismiss() }
                         .font(.headline).foregroundStyle(.white)
-                        .padding(.horizontal, 20).padding(.vertical, 12)
+                        .padding(.horizontal, 22).padding(.vertical, 11)
                         .background(QSColor.moss, in: Capsule())
                 } else {
-                    Text("LIVE")
-                        .font(.caption2.bold()).foregroundStyle(QSColor.moss)
-                        .padding(.horizontal, 9).padding(.vertical, 6)
-                        .background(QSColor.sage.opacity(0.55), in: Capsule())
+                    Button {
+                        session.togglePause()
+                    } label: {
+                        Image(systemName: session.isPaused ? "play.fill" : "pause.fill")
+                            .font(.headline)
+                            .frame(width: 44, height: 44)
+                            .background(Color.primary.opacity(0.07), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(session.isPaused ? "Resume" : "Pause")
                 }
             }
         }
@@ -149,30 +140,32 @@ struct ActiveNavigationView: View {
     }
 
     private var instruction: String {
-        if session.arrived { return "You have arrived" }
-        return session.currentStep?.instructions.nonEmpty ?? "Continue toward \(place.name)"
+        if session.arrived { return "Arrived at \(place.name)" }
+        let text = session.currentStep?.step.instructions ?? ""
+        return text.isEmpty ? "Head toward \(place.name)" : text
     }
 
-    private var instructionSymbol: String {
-        if session.arrived { return "checkmark.circle.fill" }
+    private var maneuverSymbol: String {
+        let text = (session.currentStep?.step.instructions ?? "").lowercased()
+        if text.contains("left") { return "arrow.turn.up.left" }
+        if text.contains("right") { return "arrow.turn.up.right" }
+        if text.contains("arrive") || text.contains("destination") { return "mappin" }
         return "arrow.up"
-    }
-
-    private var distanceToManeuver: String {
-        guard let distance = session.progress?.distanceToManeuver else { return "Acquiring location" }
-        return DistanceText.string(meters: distance)
-    }
-
-    private var remainingDistance: String {
-        DistanceText.string(meters: session.progress?.remainingDistance ?? session.candidate.route.distance)
-    }
-
-    private var remainingTime: String {
-        let seconds = session.progress?.remainingTime ?? session.candidate.route.expectedTravelTime
-        return "\(max(1, Int(ceil(seconds / 60)))) min"
     }
 }
 
-private extension String {
-    var nonEmpty: String? { isEmpty ? nil : self }
+private struct LiveMetric: View {
+    let symbol: String
+    let text: String
+    let value: Double
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol).font(.caption2)
+            Text(text).font(.caption.weight(.semibold))
+        }
+        .foregroundStyle(QSColor.ink)
+        .padding(.horizontal, 9).padding(.vertical, 6)
+        .background(ExposurePalette.color(for: value).opacity(0.35), in: Capsule())
+    }
 }

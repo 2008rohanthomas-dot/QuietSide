@@ -8,13 +8,22 @@ enum RouteError: Error {
 /// cost = Σ time × (1 + weighted noise, crowd, traffic, lights, visual and event penalties),
 /// priced on the same environmental snapshot the heatmap draws.
 struct RouteService {
+    /// Apple walking directions per origin/destination pair. Re-pricing after a trigger or
+    /// event change reuses them instead of spending the Directions rate limit.
+    private static var directionsCache: [String: [MKRoute]] = [:]
+
     func walkingRoutes(from origin: CLLocationCoordinate2D, to destination: MKMapItem) async throws -> [MKRoute] {
+        let end = destination.placemark.coordinate
+        let key = String(format: "%.5f,%.5f>%.5f,%.5f", origin.latitude, origin.longitude, end.latitude, end.longitude)
+        if let cached = Self.directionsCache[key] { return cached }
         let request = MKDirections.Request()
         request.source = MKMapItem(placemark: MKPlacemark(coordinate: origin))
         request.destination = destination
         request.transportType = .walking
         request.requestsAlternateRoutes = true
-        return try await MKDirections(request: request).calculate().routes
+        let routes = try await MKDirections(request: request).calculate().routes
+        Self.directionsCache[key] = routes
+        return routes
     }
 
     /// Exactly two candidates: Fastest, then Calmest.
@@ -41,7 +50,9 @@ struct RouteService {
             )
             priced.append((route, exposure))
         }
-        guard let quickest = priced.first else { throw RouteError.noRoute }
+        guard let quickest = priced.min(by: { $0.route.expectedTravelTime < $1.route.expectedTravelTime }) else {
+            throw RouteError.noRoute
+        }
 
         let fastestTime = quickest.route.expectedTravelTime
         let timeLimit = min(fastestTime * EnvironmentalWeights.maxDetourFactor, fastestTime + EnvironmentalWeights.maxDetourSeconds)

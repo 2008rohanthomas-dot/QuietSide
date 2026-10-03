@@ -2,65 +2,21 @@ import SwiftUI
 import MapKit
 import Observation
 
-// MARK: - Store
-
-/// Loads the bundled environmental data once, off the main thread, and caches both the
-/// scoring model and its map overlays for every screen.
-@Observable
-final class EnvironmentStore {
-    static let shared = EnvironmentStore()
-
-    private(set) var model: EnvironmentalExposureModel?
-    private(set) var bandOverlays: [ExposureBandOverlay] = []
-    @ObservationIgnored private var loading: Task<EnvironmentalExposureModel?, Never>?
-
-    @discardableResult
-    func load() async -> EnvironmentalExposureModel? {
-        if let model { return model }
-        let task = loading ?? Task.detached(priority: .userInitiated) {
-            EnvironmentalExposureModel.loadBundled()
-        }
-        loading = task
-        let loaded = await task.value
-        if model == nil, let loaded {
-            bandOverlays = loaded.bands.flatMap { band in
-                band.polygons.enumerated().map { index, shape in
-                    ExposureBandOverlay(
-                        id: band.level * 100_000 + index,
-                        level: band.level,
-                        polygon: MKPolygon(
-                            coordinates: shape.exterior,
-                            count: shape.exterior.count,
-                            interiorPolygons: shape.holes.map { MKPolygon(coordinates: $0, count: $0.count) }
-                        )
-                    )
-                }
-            }
-            model = loaded
-        }
-        return loaded
-    }
-}
-
-struct ExposureBandOverlay: Identifiable {
-    let id: Int
-    let level: Int
-    let polygon: MKPolygon
-}
+// MARK: - Layer settings
 
 @Observable
 final class MapLayerSettings {
     static let shared = MapLayerSettings()
 
-    var showsExposure: Bool { didSet { UserDefaults.standard.set(showsExposure, forKey: "layer.exposure") } }
-    var showsIntersections: Bool { didSet { UserDefaults.standard.set(showsIntersections, forKey: "layer.intersections") } }
-    var showsActivity: Bool { didSet { UserDefaults.standard.set(showsActivity, forKey: "layer.activity") } }
+    var layer: EnvironmentalLayer { didSet { UserDefaults.standard.set(layer.rawValue, forKey: "layer.selected") } }
+    var showsHeatmap: Bool { didSet { UserDefaults.standard.set(showsHeatmap, forKey: "layer.heatmap") } }
+    var showsMarkers: Bool { didSet { UserDefaults.standard.set(showsMarkers, forKey: "layer.markers") } }
 
     private init() {
         let defaults = UserDefaults.standard
-        showsExposure = defaults.object(forKey: "layer.exposure") as? Bool ?? true
-        showsIntersections = defaults.object(forKey: "layer.intersections") as? Bool ?? true
-        showsActivity = defaults.object(forKey: "layer.activity") as? Bool ?? true
+        layer = defaults.string(forKey: "layer.selected").flatMap(EnvironmentalLayer.init(rawValue:)) ?? .overall
+        showsHeatmap = defaults.object(forKey: "layer.heatmap") as? Bool ?? true
+        showsMarkers = defaults.object(forKey: "layer.markers") as? Bool ?? true
     }
 }
 
@@ -68,8 +24,8 @@ final class MapLayerSettings {
 
 enum ExposurePalette {
     private static let stops: [(value: Double, rgb: (Double, Double, Double))] = [
-        (0.00, (0.80, 0.86, 0.80)),
-        (0.20, (0.96, 0.80, 0.36)),
+        (0.00, (0.55, 0.78, 0.62)),
+        (0.25, (0.96, 0.80, 0.36)),
         (0.45, (0.94, 0.58, 0.25)),
         (0.70, (0.84, 0.28, 0.21)),
         (1.00, (0.60, 0.10, 0.15))
@@ -98,18 +54,19 @@ enum ExposurePalette {
 
     /// Band fills stack, so each level is individually faint; the map stays readable.
     static func bandColor(level: Int) -> Color {
-        let threshold = EnvironmentalExposureModel.bandThresholds[min(level, EnvironmentalExposureModel.bandThresholds.count - 1)]
-        return color(for: threshold + 0.1)
+        let thresholds = EnvironmentalExposureModel.bandThresholds
+        return color(for: thresholds[min(level, thresholds.count - 1)] + 0.1)
     }
 
     static func bandOpacity(level: Int) -> Double { [0.15, 0.15, 0.16, 0.18, 0.21][min(level, 4)] }
 
     static let signal = QSColor.ink
-    static let visual = Color(red: 0.49, green: 0.36, blue: 0.80)
+    static let event = Color(red: 0.55, green: 0.25, blue: 0.75)
 }
 
 // MARK: - Map content
 
+/// The heatmap for the selected layer plus crossings and event areas, all from `EnvironmentStore`.
 struct EnvironmentalMapLayer: MapContent {
     let store: EnvironmentStore
     let settings: MapLayerSettings
@@ -117,30 +74,78 @@ struct EnvironmentalMapLayer: MapContent {
     var fieldOpacity: Double = 1
 
     var body: some MapContent {
-        if settings.showsExposure {
-            ForEach(store.bandOverlays) { band in
+        if settings.showsHeatmap {
+            ForEach(store.overlays[settings.layer] ?? []) { band in
                 MapPolygon(band.polygon)
                     .foregroundStyle(ExposurePalette.bandColor(level: band.level)
                         .opacity(ExposurePalette.bandOpacity(level: band.level) * fieldOpacity))
                     .mapOverlayLevel(level: .aboveRoads)
             }
         }
-        if settings.showsIntersections {
-            ForEach(CampustownStimuli.intersections) { stimulus in
-                Annotation(stimulus.label, coordinate: stimulus.coordinate, anchor: .center) {
-                    IntersectionStimulusMarker(intensity: stimulus.intensity)
+        if settings.showsMarkers {
+            if settings.layer == .traffic || settings.layer == .overall {
+                ForEach(CampustownStimuli.intersections) { stimulus in
+                    Annotation(stimulus.label, coordinate: stimulus.coordinate, anchor: .center) {
+                        IntersectionStimulusMarker(intensity: stimulus.intensity)
+                    }
+                    .annotationTitles(.hidden)
+                }
+            }
+            ForEach(CampusEventCatalog.all.filter { $0.status(at: store.now) != .ended }) { event in
+                let active = event.status(at: store.now) == .active
+                if active {
+                    MapCircle(center: event.center, radius: event.radius)
+                        .foregroundStyle(ExposurePalette.event.opacity(0.12))
+                        .stroke(ExposurePalette.event.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                }
+                Annotation(event.area, coordinate: event.center, anchor: .center) {
+                    EventMarker(event: event, active: active)
                 }
                 .annotationTitles(.hidden)
             }
         }
-        if settings.showsActivity {
-            ForEach(CampustownStimuli.visual) { stimulus in
-                Annotation(stimulus.label, coordinate: stimulus.coordinate, anchor: .center) {
-                    VisualStimulusMarker(intensity: stimulus.intensity)
-                }
-                .annotationTitles(.hidden)
+    }
+}
+
+/// A route drawn in pieces, each colored by the selected layer's value at that stretch.
+struct ExposureRouteLine: MapContent {
+    let candidate: RouteCandidate
+    let layer: EnvironmentalLayer
+    var selected = true
+
+    var body: some MapContent {
+        if selected {
+            MapPolyline(candidate.route.polyline)
+                .stroke(.white, style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
+            MapPolyline(candidate.route.polyline)
+                .stroke(QSColor.route(candidate.kind), style: StrokeStyle(lineWidth: 9, lineCap: .round, lineJoin: .round))
+            ForEach(Array(candidate.exposure.segments.enumerated()), id: \.offset) { _, segment in
+                MapPolyline(coordinates: segment.coordinates)
+                    .stroke(
+                        ExposurePalette.color(for: segment.value(for: layer)),
+                        style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round)
+                    )
             }
+        } else {
+            MapPolyline(candidate.route.polyline)
+                .stroke(
+                    QSColor.route(candidate.kind).opacity(0.7),
+                    style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round, dash: [1, 8])
+                )
         }
+    }
+}
+
+/// The simulated current location.
+struct OriginMarker: View {
+    var body: some View {
+        ZStack {
+            Circle().fill(QSColor.routeFast.opacity(0.18)).frame(width: 30, height: 30)
+            Circle().fill(.white).frame(width: 17, height: 17)
+            Circle().fill(QSColor.routeFast).frame(width: 12, height: 12)
+        }
+        .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
+        .accessibilityLabel("Current location, CIF")
     }
 }
 
@@ -151,94 +156,71 @@ struct IntersectionStimulusMarker: View {
         ZStack {
             Circle()
                 .fill(ExposurePalette.signal.opacity(0.12))
-                .frame(width: intensity == .high ? 20 : 15, height: intensity == .high ? 20 : 15)
+                .frame(width: intensity == .high ? 18 : 14, height: intensity == .high ? 18 : 14)
             Circle()
                 .fill(.white)
-                .frame(width: 9, height: 9)
-                .overlay(Circle().stroke(ExposurePalette.signal, lineWidth: 2.2))
+                .frame(width: 8, height: 8)
+                .overlay(Circle().stroke(ExposurePalette.signal, lineWidth: 2))
         }
         .accessibilityHidden(true)
     }
 }
 
-struct VisualStimulusMarker: View {
-    let intensity: EnvironmentalStimulus.Intensity
+struct EventMarker: View {
+    let event: CampusEvent
+    let active: Bool
 
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(ExposurePalette.visual.opacity(0.16))
-                .frame(width: intensity == .high ? 24 : 18, height: intensity == .high ? 24 : 18)
-            DiamondGlyph(size: 9)
-        }
-        .accessibilityHidden(true)
-    }
-}
-
-private struct DiamondGlyph: View {
-    let size: CGFloat
-    var body: some View {
-        RoundedRectangle(cornerRadius: 1.5)
-            .fill(ExposurePalette.visual)
-            .overlay(RoundedRectangle(cornerRadius: 1.5).stroke(.white, lineWidth: 1.5))
-            .frame(width: size, height: size)
-            .rotationEffect(.degrees(45))
+        Image(systemName: event.symbol)
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(active ? .white : ExposurePalette.event)
+            .frame(width: 28, height: 28)
+            .background(active ? AnyShapeStyle(ExposurePalette.event) : AnyShapeStyle(.thickMaterial), in: Circle())
+            .overlay(Circle().stroke(ExposurePalette.event, lineWidth: active ? 0 : 1.5))
+            .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
+            .accessibilityLabel(event.name)
     }
 }
 
 // MARK: - Chrome
 
-struct ExposureLegend: View {
-    let settings: MapLayerSettings
+/// Noise / Crowd / Traffic / Overall switcher with a compact legend.
+struct LayerPicker: View {
+    @Bindable var settings: MapLayerSettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if settings.showsExposure {
-                Text("ENVIRONMENTAL EXPOSURE")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.secondary)
-                Capsule()
-                    .fill(ExposurePalette.legendGradient)
-                    .frame(width: 132, height: 6)
-                HStack {
-                    Text("Low")
-                    Spacer()
-                    Text("High")
+            HStack(spacing: 2) {
+                ForEach(EnvironmentalLayer.allCases) { layer in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { settings.layer = layer }
+                    } label: {
+                        Text(layer.title)
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .foregroundStyle(settings.layer == layer ? .white : .primary)
+                            .background(settings.layer == layer ? QSColor.ink : .clear, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
                 }
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 132)
             }
-            if settings.showsIntersections || settings.showsActivity {
-                HStack(spacing: 10) {
-                    if settings.showsIntersections {
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(.white)
-                                .frame(width: 8, height: 8)
-                                .overlay(Circle().stroke(ExposurePalette.signal, lineWidth: 2))
-                            Text("Signal")
-                        }
-                    }
-                    if settings.showsActivity {
-                        HStack(spacing: 4) {
-                            DiamondGlyph(size: 7)
-                            Text("Activity")
-                        }
-                    }
+            if settings.showsHeatmap {
+                HStack(spacing: 6) {
+                    Text(settings.layer.lowLabel)
+                    Capsule().fill(ExposurePalette.legendGradient).frame(height: 5)
+                    Text(settings.layer.highLabel)
                 }
-                .font(.system(size: 9, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.primary.opacity(0.06), lineWidth: 1)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Legend: environmental exposure from low to high, signalized crossings, activity hotspots")
+        .padding(4)
+        .padding(.bottom, settings.showsHeatmap ? 4 : 0)
+        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.primary.opacity(0.06), lineWidth: 1))
+        .fixedSize()
     }
 }
 
@@ -247,54 +229,80 @@ struct MapLayerMenu: View {
 
     var body: some View {
         Menu {
-            Toggle(isOn: $settings.showsExposure) {
-                Label("Environmental exposure", systemImage: "aqi.medium")
-            }
-            Toggle(isOn: $settings.showsIntersections) {
-                Label("Intersection stimuli", systemImage: "circle.circle")
-            }
-            Toggle(isOn: $settings.showsActivity) {
-                Label("Activity hotspots", systemImage: "diamond.fill")
-            }
+            Toggle(isOn: $settings.showsHeatmap) { Label("Heatmap", systemImage: "aqi.medium") }
+            Toggle(isOn: $settings.showsMarkers) { Label("Crossings & events", systemImage: "mappin.and.ellipse") }
         } label: {
-            Image(systemName: "square.3.layers.3d")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.primary)
-                .frame(width: 36, height: 36)
-                .background(.thickMaterial, in: Circle())
-                .overlay(Circle().stroke(Color.primary.opacity(0.06), lineWidth: 1))
+            MapControlIcon(systemImage: "square.3.layers.3d")
         }
         .accessibilityLabel("Map layers")
     }
 }
 
-/// Exposure along a route, start → destination, using the same colour ramp as the map.
-struct ExposureStrip: View {
-    let profile: [Double]
+/// Live time by default; presets jump to points in today's event schedule.
+struct EventClockMenu: View {
+    let store: EnvironmentStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Capsule()
-                .fill(LinearGradient(
-                    stops: profile.enumerated().map { index, value in
-                        .init(color: ExposurePalette.color(for: value),
-                              location: profile.count > 1 ? Double(index) / Double(profile.count - 1) : 0)
-                    },
-                    startPoint: .leading,
-                    endPoint: .trailing
-                ))
-                .frame(height: 7)
-            HStack {
-                Text("Start")
-                Spacer()
-                Text("Exposure along route")
-                Spacer()
-                Text("Arrive")
+        Menu {
+            Button { store.setTime(nil) } label: {
+                Label("Live time", systemImage: store.timeOverride == nil ? "checkmark" : "clock")
             }
-            .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(.secondary)
+            Section("Today") {
+                ForEach(CampusEventCatalog.all) { event in
+                    let preview = event.start.addingTimeInterval(45 * 60)
+                    Button {
+                        store.setTime(preview)
+                    } label: {
+                        Text("\(preview.formatted(CampusEventCatalog.timeStyle)) · \(event.name)")
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "clock")
+                Text(store.now.formatted(CampusEventCatalog.timeStyle))
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(store.timeOverride == nil ? Color.primary : ExposurePalette.event)
+            .padding(.horizontal, 11)
+            .frame(height: 36)
+            .background(.thickMaterial, in: Capsule())
+            .overlay(Capsule().stroke(Color.primary.opacity(0.06), lineWidth: 1))
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Exposure along route")
+        .accessibilityLabel("Time")
+    }
+}
+
+struct MapControlIcon: View {
+    let systemImage: String
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(.primary)
+            .frame(width: 36, height: 36)
+            .background(.thickMaterial, in: Circle())
+            .overlay(Circle().stroke(Color.primary.opacity(0.06), lineWidth: 1))
+    }
+}
+
+/// Exposure along a route, start → destination, using the same colour ramp as the map.
+struct ExposureStrip: View {
+    let segments: [RouteExposureSegment]
+    let layer: EnvironmentalLayer
+
+    var body: some View {
+        let values = segments.map { $0.value(for: layer) }
+        Capsule()
+            .fill(LinearGradient(
+                stops: values.enumerated().map { index, value in
+                    .init(color: ExposurePalette.color(for: value),
+                          location: values.count > 1 ? Double(index) / Double(values.count - 1) : 0)
+                },
+                startPoint: .leading,
+                endPoint: .trailing
+            ))
+            .frame(height: 7)
+            .accessibilityLabel("\(layer.title) along route")
     }
 }

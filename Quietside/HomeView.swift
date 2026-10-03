@@ -3,287 +3,188 @@ import MapKit
 
 struct HomeView: View {
     let profile: SensoryProfile
-    let locationService: LocationService
     @State private var searchService = PlaceSearchService()
     @State private var query = ""
-    @State private var searchResult: SearchResult?
-    @State private var localError: String?
-    @State private var manualOrigin: Place?
-    @State private var showManualOriginPicker = false
-    @State private var camera: MapCameraPosition = .userLocation(followsHeading: false, fallback: .automatic)
+    @State private var destination: Place?
+    @State private var camera: MapCameraPosition = .region(CampusOrigin.region)
     @State private var environment = EnvironmentStore.shared
     @State private var layers = MapLayerSettings.shared
-    @Environment(\.openURL) private var openURL
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         NavigationStack {
             ZStack(alignment: .bottom) {
                 Map(position: $camera) {
                     EnvironmentalMapLayer(store: environment, settings: layers)
-                    UserAnnotation()
-                    if let manualOrigin {
-                        Marker("Manual start", coordinate: manualOrigin.coordinate).tint(QSColor.amber)
-                    }
+                    Annotation("CIF", coordinate: CampusOrigin.cif.coordinate, anchor: .center) { OriginMarker() }
                 }
                 .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll))
-                .ignoresSafeArea(edges: .top)
-
-                VStack {
-                    HStack(alignment: .top) {
-                        ExposureLegend(settings: layers)
-                        Spacer()
-                        MapLayerMenu(settings: layers)
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-
-                VStack(spacing: 14) {
-                    locationStatus
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Where do you want to go?").font(.title2.bold())
-                        Text("Search real places, then compare real walking routes.")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                        HStack(spacing: 10) {
-                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                            TextField("Grainger Library", text: $query)
-                                .textInputAutocapitalization(.words)
-                                .submitLabel(.search)
-                                .onSubmit(search)
-                            Button(action: search) {
-                                Group {
-                                    if searchService.isSearching { ProgressView().tint(.white) }
-                                    else { Image(systemName: "arrow.up").font(.headline) }
-                                }
-                                .foregroundStyle(.white)
-                                .frame(width: 38, height: 38)
-                                .background(QSColor.moss, in: Circle())
-                            }
-                            .disabled(query.trimmingCharacters(in: .whitespaces).isEmpty || searchService.isSearching)
-                            .opacity(query.trimmingCharacters(in: .whitespaces).isEmpty ? 0.45 : 1)
-                            .accessibilityLabel("Search")
+                .overlay(alignment: .top) {
+                    VStack(alignment: .trailing, spacing: 8) {
+                        HStack(alignment: .top) {
+                            LayerPicker(settings: layers)
+                            Spacer()
+                            MapLayerMenu(settings: layers)
                         }
-                        .padding(12)
-                        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 16))
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack {
-                                PromptChip(text: "Quiet study") { usePrompt("quiet library") }
-                                PromptChip(text: "Coffee") { usePrompt("coffee") }
-                                PromptChip(text: "Grainger") { usePrompt("Grainger Engineering Library") }
-                            }
-                        }
-
-                        if let error = localError ?? searchService.errorMessage {
-                            Label(error, systemImage: "exclamationmark.triangle.fill")
-                                .font(.caption).foregroundStyle(QSColor.coral)
+                        HStack(spacing: 8) {
+                            EventClockMenu(store: environment)
+                            Button {
+                                withAnimation { camera = .region(CampusOrigin.region) }
+                            } label: { MapControlIcon(systemImage: "location.fill") }
+                            .accessibilityLabel("Center on CIF")
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
                 }
-                .quietCard()
-                .padding(.horizontal, 16)
-                .padding(.bottom, 10)
+
+                bottomCard
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
             }
             .navigationTitle("Quietside")
             .navigationBarTitleDisplayMode(.inline)
-            .sheet(item: $searchResult) { result in
-                RecommendationsView(
-                    query: result.query,
-                    places: result.places,
-                    origin: result.origin,
-                    profile: profile,
-                    locationService: locationService
-                )
-            }
-            .sheet(isPresented: $showManualOriginPicker) {
-                ManualOriginPicker { place in
-                    manualOrigin = place
-                    localError = nil
-                    camera = .region(MKCoordinateRegion(
-                        center: place.coordinate,
-                        latitudinalMeters: 1_200,
-                        longitudinalMeters: 1_200
-                    ))
-                }
-            }
-            .task { await environment.load() }
-            .onAppear {
-                switch locationService.authorizationStatus {
-                case .authorizedAlways, .authorizedWhenInUse: locationService.start()
-                default: break
-                }
+            .navigationDestination(item: $destination) { place in
+                RouteComparisonView(place: place, profile: profile)
             }
         }
     }
 
-    private var locationStatus: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private var bottomCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Image(systemName: manualOrigin == nil ? locationService.quality.symbol : "mappin.circle.fill")
-                    .foregroundStyle(activeOrigin == nil ? QSColor.amber : QSColor.moss)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("ROUTE START").font(.caption2.bold()).foregroundStyle(.secondary)
-                    if let manualOrigin {
-                        Text("Manual · \(manualOrigin.name)").font(.subheadline.weight(.semibold))
-                    } else {
-                        Text(locationService.quality.label).font(.subheadline.weight(.semibold))
-                    }
+                Circle().fill(QSColor.routeFast).frame(width: 10, height: 10)
+                    .overlay(Circle().stroke(.white, lineWidth: 2))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("From CIF").font(.subheadline.weight(.semibold))
+                    Text("1405 W Springfield Ave").font(.caption).foregroundStyle(.secondary)
                 }
-                Spacer()
-                if activeOrigin != nil {
+            }
+
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search a destination", text: $query)
+                    .focused($searchFocused)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+                    .submitLabel(.search)
+                    .onSubmit(search)
+                if searchService.isSearching {
+                    ProgressView()
+                } else if !query.isEmpty {
                     Button {
-                        if manualOrigin != nil {
-                            manualOrigin = nil
-                            locationService.requestPermissionAndStart()
-                        }
-                        camera = .userLocation(followsHeading: false, fallback: .automatic)
+                        query = ""
+                        searchService.clear()
                     } label: {
-                        Image(systemName: "location.fill")
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.bordered)
-                    .accessibilityLabel(manualOrigin == nil ? "Recenter map" : "Use GPS location")
+                    .accessibilityLabel("Clear")
                 }
             }
+            .padding(12)
+            .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 16))
 
-            if activeOrigin == nil {
-                HStack {
-                    Button(locationButtonTitle, action: locationAction)
-                        .font(.caption.weight(.bold))
-                        .buttonStyle(.borderedProminent)
-                        .tint(QSColor.moss)
-                    Button("Choose start") { showManualOriginPicker = true }
-                        .font(.caption.weight(.bold))
-                        .buttonStyle(.bordered)
-                }
-#if targetEnvironment(simulator)
-                Text("Simulator: choose Debug → Simulate Location in Xcode, or choose a start manually.")
-                    .font(.caption2).foregroundStyle(.secondary)
-#endif
-            } else if manualOrigin != nil {
-                Button("Change manual start") { showManualOriginPicker = true }
-                    .font(.caption.weight(.bold))
-                    .buttonStyle(.plain)
+            if let error = searchService.errorMessage {
+                Label(error, systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(QSColor.coral)
             }
-        }
-    }
 
-    private var activeOrigin: CLLocation? {
-        if let manualOrigin {
-            return CLLocation(latitude: manualOrigin.latitude, longitude: manualOrigin.longitude)
-        }
-        return locationService.latestLocation
-    }
-
-    private var locationButtonTitle: String {
-        switch locationService.quality {
-        case .denied, .restricted: "Open Settings"
-        case .unavailable: "Retry GPS"
-        default: "Use location"
-        }
-    }
-
-    private func locationAction() {
-        switch locationService.quality {
-        case .denied, .restricted:
-            if let settingsURL = URL(string: UIApplication.openSettingsURLString) { openURL(settingsURL) }
-        default:
-            locationService.requestPermissionAndStart()
-        }
-    }
-
-    private func usePrompt(_ text: String) {
-        query = text
-        search()
-    }
-
-    private func search() {
-        let cleaned = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return }
-        guard let origin = activeOrigin else {
-            localError = "Use GPS or choose a starting point before searching."
-            locationService.requestPermissionAndStart()
-            return
-        }
-        localError = nil
-        Task {
-            await searchService.search(cleaned, near: origin)
-            guard !searchService.results.isEmpty else { return }
-            searchResult = SearchResult(query: cleaned, places: searchService.results, origin: origin)
-        }
-    }
-}
-
-private struct SearchResult: Identifiable {
-    let id = UUID()
-    let query: String
-    let places: [Place]
-    let origin: CLLocation
-}
-
-private struct PromptChip: View {
-    let text: String
-    let action: () -> Void
-    var body: some View {
-        Button(text, action: action)
-            .font(.caption.weight(.semibold)).foregroundStyle(QSColor.mossDark)
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(QSColor.sage.opacity(0.55), in: Capsule())
-    }
-}
-
-private struct ManualOriginPicker: View {
-    let onSelect: (Place) -> Void
-    @State private var query = ""
-    @State private var searchService = PlaceSearchService()
-    @Environment(\.dismiss) private var dismiss
-
-    private let campusCenter = CLLocation(latitude: 40.1107, longitude: -88.2272)
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 12) {
-                HStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Starting address or place", text: $query)
-                        .submitLabel(.search)
-                        .onSubmit(search)
-                    if searchService.isSearching { ProgressView() }
-                }
-                .padding(12)
-                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
-                .padding(.horizontal)
-
-                if searchService.results.isEmpty {
-                    ContentUnavailableView(
-                        "Choose a route start",
-                        systemImage: "mappin.and.ellipse",
-                        description: Text(searchService.errorMessage ?? "Search for your building, address, or a nearby landmark.")
-                    )
-                } else {
-                    List(searchService.results) { place in
-                        Button {
-                            onSelect(place)
-                            dismiss()
-                        } label: {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(place.name).font(.headline).foregroundStyle(.primary)
-                                Text(place.subtitle).font(.caption).foregroundStyle(.secondary)
+            if !searchService.results.isEmpty {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(searchService.results) { place in
+                            Button {
+                                searchFocused = false
+                                destination = place
+                            } label: {
+                                PlaceRow(place: place)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .buttonStyle(.plain)
+                            if place.id != searchService.results.last?.id { Divider() }
                         }
                     }
-                    .listStyle(.plain)
+                }
+                .frame(maxHeight: 240)
+            } else {
+                EventList(store: environment) { event in
+                    withAnimation {
+                        camera = .region(MKCoordinateRegion(center: event.center, latitudinalMeters: 1_400, longitudinalMeters: 1_400))
+                    }
                 }
             }
-            .navigationTitle("Choose starting point")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } } }
         }
+        .quietCard()
     }
 
     private func search() {
-        Task { await searchService.search(query, near: campusCenter) }
+        Task { await searchService.search(query, near: CampusOrigin.location) }
+    }
+}
+
+private struct PlaceRow: View {
+    let place: Place
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "mappin.circle.fill").font(.title3).foregroundStyle(QSColor.moss)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(place.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                Text(place.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Text(DistanceText.string(meters: CampusOrigin.location.distance(from: CLLocation(latitude: place.latitude, longitude: place.longitude))))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+    }
+}
+
+/// Today's events and their live state.
+private struct EventList: View {
+    let store: EnvironmentStore
+    let onSelect: (CampusEvent) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Today · Homecoming").font(.caption.weight(.bold)).foregroundStyle(.secondary)
+            ForEach(CampusEventCatalog.all) { event in
+                Button { onSelect(event) } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: event.symbol)
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(ExposurePalette.event)
+                            .frame(width: 26, height: 26)
+                            .background(ExposurePalette.event.opacity(0.12), in: Circle())
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(event.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                            Text("\(event.timeRange) · \(event.area)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                        StatusPill(status: event.status(at: store.now))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .opacity(event.status(at: store.now) == .ended ? 0.5 : 1)
+            }
+        }
+    }
+}
+
+private struct StatusPill: View {
+    let status: CampusEvent.Status
+
+    var body: some View {
+        let (text, color): (String, Color) = switch status {
+        case .active: ("Live", ExposurePalette.event)
+        case .upcoming: ("Upcoming", .secondary)
+        case .ended: ("Ended", .secondary)
+        }
+        Text(text)
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(status == .active ? .white : color)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(status == .active ? AnyShapeStyle(color) : AnyShapeStyle(Color.primary.opacity(0.07)), in: Capsule())
     }
 }

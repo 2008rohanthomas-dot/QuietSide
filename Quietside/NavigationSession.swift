@@ -1,101 +1,86 @@
 import MapKit
 import Observation
 
+/// Turn-by-turn along a route, driven by a simulated walker that starts at CIF.
 @MainActor
 @Observable
 final class NavigationSession {
-    private(set) var candidate: RouteCandidate
-    private(set) var progress: NavigationProgress?
-    private(set) var isRerouting = false
-    private(set) var rerouteGeneration = 0
-    private(set) var arrived = false
-    private var previousAlongDistance: CLLocationDistance?
-    private var consecutiveOffRouteFixes = 0
+    let candidate: RouteCandidate
+    /// Simulated seconds per real second.
+    static let playbackSpeed: Double = 8
+
+    private(set) var travelled: CLLocationDistance = 0
+    private(set) var isPaused = false
+    private let coordinates: [CLLocationCoordinate2D]
+    private let cumulative: [CLLocationDistance]
+    private let length: CLLocationDistance
+    @ObservationIgnored private var ticker: Task<Void, Never>?
 
     init(candidate: RouteCandidate) {
         self.candidate = candidate
+        coordinates = PolylineGeometry.coordinates(of: candidate.route.polyline)
+        var running: CLLocationDistance = 0
+        var cumulative: [CLLocationDistance] = [0]
+        for (a, b) in zip(coordinates, coordinates.dropFirst()) {
+            running += MKMapPoint(a).distance(to: MKMapPoint(b))
+            cumulative.append(running)
+        }
+        self.cumulative = cumulative
+        length = running
     }
 
-    var currentStep: WalkingRoute.Step? {
-        guard !candidate.route.steps.isEmpty else { return nil }
-        let index = min(progress?.currentStepIndex ?? 0, candidate.route.steps.count - 1)
-        return candidate.route.steps[index]
-    }
+    var fractionComplete: Double { length > 0 ? min(1, travelled / length) : 1 }
+    var arrived: Bool { fractionComplete >= 1 }
+    var remainingDistance: CLLocationDistance { candidate.route.distance * (1 - fractionComplete) }
+    var remainingTime: TimeInterval { candidate.route.expectedTravelTime * (1 - fractionComplete) }
 
-    func update(with location: CLLocation) {
-        guard location.horizontalAccuracy >= 0,
-              location.horizontalAccuracy <= 25,
-              abs(location.timestamp.timeIntervalSinceNow) <= 10,
-              let match = PolylineGeometry.nearestMatch(
-                to: location.coordinate,
-                on: candidate.route.polyline,
-                previousProgress: previousAlongDistance
-              ) else { return }
-
-        let fraction = match.totalDistance > 0
-            ? min(1, max(0, match.alongRouteDistance / match.totalDistance))
-            : 0
-        let routedDistance = candidate.route.distance * fraction
-        let remainingDistance = max(0, candidate.route.distance - routedDistance)
-        let remainingTime = candidate.route.expectedTravelTime * (1 - fraction)
-        let stepResult = stepIndexAndRemaining(for: routedDistance)
-
-        if match.distanceToLine >= 30 {
-            consecutiveOffRouteFixes += 1
-        } else {
-            consecutiveOffRouteFixes = 0
-        }
-        let isOffRoute = consecutiveOffRouteFixes >= 3
-        if isOffRoute, !isRerouting {
-            rerouteGeneration += 1
-            consecutiveOffRouteFixes = 0
-        }
-
-        previousAlongDistance = max(previousAlongDistance ?? 0, match.alongRouteDistance)
-        arrived = remainingDistance <= 15
-        progress = NavigationProgress(
-            snappedCoordinate: match.coordinate,
-            distanceToRoute: match.distanceToLine,
-            fractionComplete: fraction,
-            remainingDistance: remainingDistance,
-            remainingTime: remainingTime,
-            currentStepIndex: stepResult.index,
-            distanceToManeuver: stepResult.remaining,
-            isOffRoute: isOffRoute
+    var position: CLLocationCoordinate2D {
+        guard coordinates.count >= 2 else { return coordinates.first ?? CampusOrigin.cif.coordinate }
+        let index = min(cumulative.count - 2, max(0, (cumulative.firstIndex { $0 > travelled } ?? cumulative.count - 1) - 1))
+        let a = coordinates[index], b = coordinates[index + 1]
+        let span = cumulative[index + 1] - cumulative[index]
+        let t = span > 0 ? min(1, max(0, (travelled - cumulative[index]) / span)) : 0
+        return CLLocationCoordinate2D(
+            latitude: a.latitude + (b.latitude - a.latitude) * t,
+            longitude: a.longitude + (b.longitude - a.longitude) * t
         )
     }
 
-    func reroute(from location: CLLocation, to destination: MKMapItem, profile: SensoryProfile) async {
-        guard !isRerouting else { return }
-        isRerouting = true
-        defer { isRerouting = false }
-        do {
-            let options = try await RouteService().candidates(
-                from: location.coordinate,
-                to: destination,
-                profile: profile
-            )
-            let replacement = options.first(where: { $0.kind == candidate.kind }) ?? options.first
-            guard let replacement else { return }
-            candidate = replacement
-            progress = nil
-            previousAlongDistance = nil
-            consecutiveOffRouteFixes = 0
-        } catch {
-            // Preserve the previous route. A later accurate off-route sequence can retry.
+    /// Current step and the distance left until its maneuver.
+    var currentStep: (step: WalkingRoute.Step, remaining: CLLocationDistance)? {
+        let steps = candidate.route.steps
+        guard !steps.isEmpty else { return nil }
+        let routed = candidate.route.distance * fractionComplete
+        var end: CLLocationDistance = 0
+        for (index, step) in steps.enumerated() {
+            end += step.distance
+            // The zero-length "start" step is skipped once walking begins.
+            if routed < end || index == steps.count - 1 {
+                let next = index + 1 < steps.count ? steps[index + 1] : step
+                return (next, max(0, end - routed))
+            }
+        }
+        return nil
+    }
+
+    func start() {
+        guard ticker == nil else { return }
+        let speed = length / max(candidate.route.expectedTravelTime, 1)
+        ticker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let self else { return }
+                guard !self.isPaused else { continue }
+                self.travelled = min(self.length, self.travelled + speed * 0.25 * Self.playbackSpeed)
+                if self.arrived { self.stop() }
+            }
         }
     }
 
-    private func stepIndexAndRemaining(for routeDistance: CLLocationDistance) -> (index: Int, remaining: CLLocationDistance) {
-        let steps = candidate.route.steps
-        guard !steps.isEmpty else { return (0, max(0, candidate.route.distance - routeDistance)) }
-        var cumulative: CLLocationDistance = 0
-        for (index, step) in steps.enumerated() {
-            cumulative += step.distance
-            if routeDistance <= cumulative {
-                return (index, max(0, cumulative - routeDistance))
-            }
-        }
-        return (steps.count - 1, 0)
+    func togglePause() { isPaused.toggle() }
+
+    func stop() {
+        ticker?.cancel()
+        ticker = nil
     }
 }

@@ -75,6 +75,13 @@ enum CampusOrigin {
 enum RouteKind: String {
     case fastest = "Fastest"
     case calmest = "Calmest"
+
+    var symbol: String {
+        switch self {
+        case .fastest: "bolt.fill"
+        case .calmest: "leaf.fill"
+        }
+    }
 }
 
 /// Real Apple Maps walking geometry: a single `MKRoute` or consecutive legs through
@@ -126,15 +133,6 @@ struct RouteCandidate: Identifiable {
 
     var minutes: Int { max(1, Int(ceil(route.expectedTravelTime / 60))) }
     var distanceMiles: Double { route.distance / 1_609.344 }
-}
-
-struct NavigationProgress {
-    let snappedCoordinate: CLLocationCoordinate2D
-    let fractionComplete: Double
-    let remainingDistance: CLLocationDistance
-    let remainingTime: TimeInterval
-    let currentStepIndex: Int
-    let distanceToManeuver: CLLocationDistance
 }
 
 enum DistanceText {

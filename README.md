@@ -1,64 +1,66 @@
 # Quietside iOS App
 
-A native SwiftUI walking-navigation app for comparing lower-stimulation routes around UIUC and Champaign-Urbana.
+A SwiftUI walking-navigation app for lower-stimulation routes around UIUC Campustown, built as a hackathon demo for Saturday, October 3, 2026 (Illinois Homecoming).
 
 ## Open and run
 
-1. Open `Quietside.xcodeproj` in Xcode.
-2. Select a connected iPhone for the most reliable location test, or an iPhone simulator.
-3. Press Run.
-4. Tap **Use location** when you are ready to search.
+1. Open `Quietside.xcodeproj` in Xcode 27.
+2. Choose an iPhone simulator or device and press Run.
+3. Pick your sensory triggers, then search for a destination.
 
-For simulator testing, choose **Debug → Simulate Location → UIUC** (from the included `UIUC.gpx`) or another GPX walking route in Xcode before starting navigation. The simulator does not provide coordinates merely because location permission was granted. You can also use **Choose start** in the app. The project was created with Xcode 27 and builds successfully for the generic iOS Simulator target.
+No location or microphone permission is requested. The demo origin is fixed to the Campus Instructional Facility (CIF), 1405 W Springfield Ave, Urbana.
 
-## Implemented
+## Demo flow
 
-- Real foreground location using Core Location, including permission, poor-accuracy, stale-fix, and unavailable states
-- Ten-second location timeout with retry, Settings recovery, and a searchable manual-start fallback
-- Map camera centered on the actual user rather than a hard-coded UIUC coordinate
-- Real destination search through `MKLocalSearch`
-- Real walking geometry, steps, distance, and ETA through `MKDirections`
-- Honest handling when Apple Maps returns no alternate route
-- GPS-driven map matching and route progress
-- Automatic maneuver advancement, remaining distance/time, arrival detection, and sustained off-route rerouting
-- Official City of Champaign ArcGIS streetlight and traffic-signal queries around each real route
-- Source, method, coverage, and confidence shown for every sensory dimension
-- Missing public live noise/crowd data shown as **Unknown**, not converted into a favorable score
-- Campustown environmental-exposure field built on-device from bundled IDOT AADT roadway data and OpenStreetMap venues, drawn as smooth contour bands on every map
-- Curated major signalized intersections and activity hotspots shown as subtle map markers, with a compact legend and layer toggles
-- Exposure-aware route alternatives: Apple Maps is asked for walks through the calmest nearby blocks, then every route is scored against the same field the map draws
-- Five-second on-device dBFS measurement with optional local-only storage
-- Persisted sensory preferences and source links in Settings
-- Permission strings for location and microphone
+CIF → search a destination → compare **Fastest** and **Calmest** → switch the map between Overall / Noise / Crowd / Traffic → start the route (a simulated walk from CIF at 8× speed).
 
-## Architecture
+The clock button on the Explore map follows real Central Time by default. Its menu can jump to a moment in each of today's events so their effect on the map and routes can be shown at any time of day.
 
-- `LocationService.swift`: permission and filtered location updates
-- `PlaceSearchService.swift`: Apple Maps place search
-- `RouteService.swift`: walking alternatives and candidate selection
-- `OfficialDataRepository.swift`: official-source registry and Champaign ArcGIS ingestion
-- `PolylineGeometry.swift`: route projection and distance calculations
-- `NavigationSession.swift`: live progress, maneuver selection, arrival, and rerouting
-- `Models.swift`: provenance-aware route and sensory models; `WalkingRoute` wraps single or via-point Apple routes
-- `EnvironmentalData.swift`: GeoJSON loading, curated stimuli, and the single weighting configuration (`EnvironmentalWeights`)
-- `EnvironmentalExposureModel.swift`: exposure rasters, route sampling, calm via-point selection, and contour tracing
-- `EnvironmentalMapLayer.swift`: cached store, map overlay content, legend, layer menu, and per-route exposure strip
-- `Data/`: bundled `idot_aadt_campustown.geojson` and `campustown_places.geojson`
+## How routing works
 
-`SampleData.swift` now contains debug preview fixtures only. Production views do not use fixture locations, routes, places, or sensory scores.
+- **Destinations** come from `MKLocalSearch` around CIF. Nothing is pre-listed.
+- **Candidates**: Apple Maps walking routes from CIF, plus routes forced through calm via points. The via points come from a least-cost (Dijkstra) corridor over the environmental cost grid and from the calmest minor-street points on either side of the direct line.
+- **Fastest** is the candidate with the least travel time.
+- **Calmest** is the candidate with the lowest sensory cost, among those within the detour limit:
 
-## Data interpretation
+  `cost = Σ segment time × (1 + noise + crowd + traffic + lights + visual + event penalties)`
 
-Environmental exposure is a relative model, not a decibel measurement. Each road's AADT is log-scaled to a 0–1 intensity and spread with a Gaussian falloff that widens for busier roads (max over roads). Venues add a secondary, category-weighted activity influence (bars > restaurants/fast food > cafés/convenience > libraries). The combined raster (12 m cells) is contoured for the map and sampled every 8 m along each route for scoring, so the map and the route choice always use the same numbers. Routes mostly outside the modelled Campustown area are marked unknown rather than scored as calm.
+  Each penalty is weighted by the user's triggers: selected triggers ×2.0, unselected ×0.25. Active events weigh ×2.0 when Noise or Crowds is selected. When no candidate beats the fastest route, Calmest is the fastest route and the app says so.
 
-City streetlight points describe infrastructure coverage only; they do not measure brightness, glare, flicker, or working condition. Traffic-signal density is shown as a derived crossing-complexity proxy, not live traffic volume. UIUC course schedules and the federal transportation-noise map are linked as official sources, but Quietside does not turn them into live crowd or sidewalk-noise claims.
+All weights live in `EnvironmentalWeights` (`EnvironmentalData.swift`).
 
-Sound measurements are relative microphone power readings in dBFS, not calibrated dBA sound-pressure measurements. They remain on the device and are not yet incorporated into route scoring.
+## One environmental dataset
 
-## Current boundaries
+`EnvironmentalExposureModel` builds one 12 m grid per channel from the bundled data:
 
-- Foreground navigation only
-- Apple Maps controls which walking alternatives are returned
-- Champaign-owned infrastructure coverage does not include every UIUC- or Urbana-owned asset
-- No public official live pedestrian-density or sidewalk-level noise feed was available for this implementation
-- A physical-device walking test is still required before presenting reroute thresholds as field-validated
+| Channel | Source |
+| --- | --- |
+| traffic | IDOT AADT roadway volumes (`Data/idot_aadt_campustown.geojson`) |
+| crowd | Campustown venues (`Data/campustown_places.geojson`) + seeded pedestrian hubs (`CrowdHub`) |
+| visual | Seeded storefront/nightlife hotspots + venue density |
+| trafficSignalExposure | Seeded signalized intersections (`CampustownStimuli`) |
+| noiseDb | Derived from traffic, crowd and event noise |
+
+`EnvironmentSnapshot` applies the active events (`CampusEvents.swift`) for a given time. The heatmap contours, route exposure colors, route metrics, live navigation readouts and route costs all read the same snapshot grids.
+
+## Events (Central Time, Oct 3 2026)
+
+| Event | Time | Area |
+| --- | --- | --- |
+| Grange Grove Tailgating | 11:00 AM–3:15 PM | Grange Grove / stadium west side |
+| Illinois Homecoming Football vs. Purdue | 3:15–6:45 PM | Gies Memorial Stadium |
+| Homecoming Saturday Night LIVE | 6:00–9:00 PM | Downtown Champaign |
+
+Status (Upcoming → Live → Ended) is derived from the clock. While an event is live, its area gets higher crowd, noise, traffic and visual values. Those raise route costs nearby, so Calmest can steer around it.
+
+## Files
+
+- `Models.swift`: profile, CIF origin, `WalkingRoute`, `RouteCandidate`
+- `EnvironmentalData.swift`: triggers, weights, data loading, seeded stimuli and hubs
+- `EnvironmentalExposureModel.swift`: grids, event snapshot, route pricing, corridor search, contours
+- `CampusEvents.swift`: event schedule and status
+- `EnvironmentStore.swift`: shared snapshot, clock, heatmap overlays
+- `RouteService.swift`: candidate generation and Fastest/Calmest selection
+- `PlaceSearchService.swift`: destination search
+- `NavigationSession.swift`: simulated turn-by-turn along the chosen route
+- `HomeView`, `RouteComparisonView`, `ActiveNavigationView`, `EnvironmentalMapLayer`, `OnboardingView`, `SettingsView`: UI

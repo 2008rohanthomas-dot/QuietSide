@@ -3,175 +3,112 @@ import MapKit
 
 struct RouteComparisonView: View {
     let place: Place
-    let origin: CLLocation
     let profile: SensoryProfile
-    let locationService: LocationService
 
     @State private var candidates: [RouteCandidate] = []
-    @State private var selectedID: UUID?
-    @State private var camera: MapCameraPosition = .automatic
+    @State private var selectedKind: RouteKind = .calmest
+    @State private var camera: MapCameraPosition = .region(CampusOrigin.region)
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var environment = EnvironmentStore.shared
     @State private var layers = MapLayerSettings.shared
 
-    private var selectedRoute: RouteCandidate? {
-        candidates.first(where: { $0.id == selectedID }) ?? candidates.first
+    private var selected: RouteCandidate? {
+        candidates.first { $0.kind == selectedKind } ?? candidates.first
     }
 
-    /// Selected route draws last so it always sits on top.
-    private var drawOrder: [RouteCandidate] {
-        candidates.filter { $0.id != selectedRoute?.id } + candidates.filter { $0.id == selectedRoute?.id }
-    }
+    private var fastest: RouteCandidate? { candidates.first { $0.kind == .fastest } }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 18) {
-                routeMap
+        VStack(spacing: 0) {
+            routeMap
 
-                if isLoading {
-                    VStack(spacing: 12) {
-                        ProgressView()
-                        Text("Calculating real walking routes…").font(.headline)
-                        Text("Then checking traffic, activity, and crossings near each path.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    .quietCard()
-                } else if let errorMessage {
-                    ContentUnavailableView {
-                        Label("Route unavailable", systemImage: "map.fill")
-                    } description: {
-                        Text(errorMessage)
-                    } actions: {
-                        Button("Try again", action: loadRoutes).buttonStyle(.borderedProminent)
-                    }
-                } else {
-                    header
+            ScrollView {
+                VStack(spacing: 12) {
+                    if isLoading {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text("Finding routes").font(.headline)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 28)
+                    } else if let errorMessage {
+                        ContentUnavailableView {
+                            Label("No walking route", systemImage: "figure.walk")
+                        } description: {
+                            Text(errorMessage)
+                        } actions: {
+                            Button("Try again") { Task { await calculateRoutes() } }
+                                .buttonStyle(.borderedProminent)
+                        }
+                    } else {
+                        ForEach(candidates) { candidate in
+                            RouteOptionCard(
+                                candidate: candidate,
+                                fastest: fastest,
+                                layer: layers.layer,
+                                selected: selected?.kind == candidate.kind
+                            ) {
+                                withAnimation(.easeInOut(duration: 0.2)) { selectedKind = candidate.kind }
+                            }
+                        }
 
-                    ForEach(candidates) { candidate in
-                        RouteOptionCard(
-                            candidate: candidate,
-                            profile: profile,
-                            selected: selectedRoute?.id == candidate.id
-                        ) {
-                            withAnimation(.easeInOut(duration: 0.2)) { selectedID = candidate.id }
+                        if let selected {
+                            NavigationLink {
+                                ActiveNavigationView(candidate: selected, place: place)
+                            } label: {
+                                Label("Start \(selected.kind.rawValue)", systemImage: "figure.walk")
+                            }
+                            .buttonStyle(PrimaryButtonStyle(color: QSColor.route(selected.kind)))
+                            .padding(.top, 4)
                         }
                     }
-
-                    if let selectedRoute {
-                        NavigationLink {
-                            ActiveNavigationView(
-                                candidate: selectedRoute,
-                                place: place,
-                                profile: profile,
-                                locationService: locationService
-                            )
-                        } label: {
-                            Label("Start \(selectedRoute.kind.rawValue) route", systemImage: "location.fill")
-                        }
-                        .buttonStyle(PrimaryButtonStyle())
-                    }
-
-                    Text("Exposure is relative, modelled from traffic volumes, nearby activity, and major crossings. Unknown means no defensible source covers that dimension; Quietside never substitutes missing data with a favorable score.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
                 }
+                .padding(16)
             }
-            .padding(16)
         }
         .background(QSColor.cream.opacity(0.38))
+        .navigationTitle(place.name)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await calculateRoutes() }
+        .task(id: environment.snapshot?.activeEvents.map(\.id)) { await calculateRoutes() }
     }
 
     private var routeMap: some View {
         Map(position: $camera) {
             EnvironmentalMapLayer(store: environment, settings: layers)
-
-            ForEach(drawOrder) { candidate in
-                let selected = candidate.id == selectedRoute?.id
-                if selected {
-                    MapPolyline(candidate.route.polyline)
-                        .stroke(.white, style: StrokeStyle(lineWidth: 11, lineCap: .round, lineJoin: .round))
-                }
-                MapPolyline(candidate.route.polyline)
-                    .stroke(
-                        QSColor.route(candidate.kind).opacity(selected ? 1 : 0.6),
-                        style: StrokeStyle(
-                            lineWidth: selected ? 7 : 4.5,
-                            lineCap: .round,
-                            lineJoin: .round,
-                            dash: selected ? [] : [1, 7]
-                        )
-                    )
+            ForEach(candidates.filter { $0.kind != selected?.kind }) { candidate in
+                ExposureRouteLine(candidate: candidate, layer: layers.layer, selected: false)
             }
-            Marker("Start", coordinate: origin.coordinate).tint(.secondary)
+            if let selected {
+                ExposureRouteLine(candidate: selected, layer: layers.layer)
+            }
+            Annotation("CIF", coordinate: CampusOrigin.cif.coordinate, anchor: .center) { OriginMarker() }
             Marker(place.name, coordinate: place.coordinate).tint(QSColor.moss)
         }
         .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll))
-        .frame(height: 380)
-        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .frame(height: 360)
         .overlay(alignment: .topLeading) {
-            Text("TO \(place.name.uppercased())")
-                .font(.caption2.bold())
-                .lineLimit(1)
-                .padding(.horizontal, 10).padding(.vertical, 7)
-                .background(.thickMaterial, in: Capsule()).padding(12)
+            LayerPicker(settings: layers).padding(10)
         }
         .overlay(alignment: .topTrailing) {
             MapLayerMenu(settings: layers).padding(10)
         }
-        .overlay(alignment: .bottomLeading) {
-            ExposureLegend(settings: layers).padding(10)
-        }
-        .task { await environment.load() }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(candidates.count > 1 ? "Choose your route" : "Your walking route").font(.title.bold())
-            Text(candidates.count > 1
-                 ? "Real Apple Maps walking routes, compared against the exposure shown on the map."
-                 : "No nearby walking alternative was meaningfully different. Quietside will not fabricate one.")
-                .font(.subheadline).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func loadRoutes() {
-        Task { await calculateRoutes() }
     }
 
     private func calculateRoutes() async {
-        isLoading = true
+        isLoading = candidates.isEmpty
         errorMessage = nil
         do {
-            let start = locationService.latestLocation?.coordinate ?? origin.coordinate
-            candidates = try await RouteService().candidates(
-                from: start,
-                to: place.mapItem,
-                profile: profile
-            )
-            guard !candidates.isEmpty else {
-                errorMessage = "Apple Maps did not return a walking route for this destination."
-                isLoading = false
-                return
-            }
-            selectedID = candidates.last(where: { $0.kind == .calmest })?.id ?? candidates.first?.id
+            let result = try await RouteService().candidates(to: place.mapItem, profile: profile)
+            candidates = result
             var rect = MKMapRect.null
-            for candidate in candidates { rect = rect.union(candidate.route.polyline.boundingMapRect) }
+            for candidate in result { rect = rect.union(candidate.route.polyline.boundingMapRect) }
             if !rect.isNull {
-                let padding = max(rect.size.width, rect.size.height) * 0.18
-                camera = .rect(MKMapRect(
-                    x: rect.origin.x - padding,
-                    y: rect.origin.y - padding,
-                    width: rect.size.width + padding * 2,
-                    height: rect.size.height + padding * 2
-                ))
+                let padding = max(rect.size.width, rect.size.height) * 0.2
+                camera = .rect(rect.insetBy(dx: -padding, dy: -padding))
             }
         } catch {
-            errorMessage = "A real route could not be calculated. Check your connection and destination, then try again."
+            if candidates.isEmpty { errorMessage = "Apple Maps couldn't find a walking route from CIF to \(place.name)." }
         }
         isLoading = false
     }
@@ -179,53 +116,73 @@ struct RouteComparisonView: View {
 
 private struct RouteOptionCard: View {
     let candidate: RouteCandidate
-    let profile: SensoryProfile
+    let fastest: RouteCandidate?
+    let layer: EnvironmentalLayer
     let selected: Bool
     let action: () -> Void
 
+    private var exposure: RouteExposure { candidate.exposure }
+
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 7) {
-                            Capsule().fill(QSColor.route(candidate.kind)).frame(width: 16, height: 5)
-                            Text(candidate.kind.rawValue).font(.title3.bold())
-                        }
-                        Text("\(candidate.minutes) min · \(candidate.distanceMiles, specifier: "%.2f") mi")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    }
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
+                    Label(candidate.kind.rawValue, systemImage: candidate.kind.symbol)
+                        .font(.title3.bold())
+                        .foregroundStyle(QSColor.route(candidate.kind))
                     Spacer()
-                    CalmBadge(score: candidate.sensory.personalizedScore(for: profile))
-                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                        .font(.title3).foregroundStyle(selected ? QSColor.moss : .secondary)
+                    Text("\(candidate.minutes) min").font(.title3.bold())
+                    Text(String(format: "%.1f mi", candidate.distanceMiles))
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
-                Text(candidate.explanation).font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
-                if !candidate.highlights.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(candidate.highlights, id: \.self) { highlight in
-                            Label(highlight, systemImage: "checkmark")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(QSColor.mossDark)
-                        }
+
+                HStack(spacing: 8) {
+                    Metric(title: "Noise", value: "\(Int(exposure.averageNoiseDb.rounded())) dB",
+                           level: ExposureLevel((exposure.averageNoiseDb - EnvironmentalWeights.ambientNoiseDb) / EnvironmentalWeights.noiseRangeDb))
+                    Metric(title: "Crowd", value: ExposureLevel(exposure.averageCrowd).rawValue, level: ExposureLevel(exposure.averageCrowd))
+                    Metric(title: "Traffic", value: ExposureLevel(exposure.averageTraffic).rawValue, level: ExposureLevel(exposure.averageTraffic))
+                    Metric(title: "Signals", value: "\(exposure.intersections.count)",
+                           level: exposure.intersections.count > 3 ? .high : exposure.intersections.count > 1 ? .moderate : .low)
+                }
+
+                ExposureStrip(segments: exposure.segments, layer: layer)
+
+                if !exposure.eventIds.isEmpty,
+                   let event = CampusEventCatalog.all.first(where: { exposure.eventIds.contains($0.id) }) {
+                    Label("Passes \(event.name)", systemImage: event.symbol)
+                        .font(.caption.weight(.semibold)).foregroundStyle(ExposurePalette.event)
+                }
+
+                if candidate.kind == .calmest {
+                    if candidate.matchesFastest {
+                        Label("Fastest is also the calmest", systemImage: "checkmark.circle.fill")
+                            .font(.caption.weight(.semibold)).foregroundStyle(QSColor.mossDark)
+                    } else if let fastest {
+                        Text(RouteComparison.reasons(calm: exposure, fastest: fastest.exposure).joined(separator: " · "))
+                            .font(.caption.weight(.semibold)).foregroundStyle(QSColor.mossDark)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                if let exposure = candidate.exposure, !exposure.profile.isEmpty {
-                    ExposureStrip(profile: exposure.profile)
-                }
-                if selected {
-                    Divider()
-                    SensoryEvidenceList(sensory: candidate.sensory)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
             .quietCard()
             .overlay {
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(selected ? QSColor.moss : Color.clear, lineWidth: 2)
+                    .stroke(selected ? QSColor.route(candidate.kind) : Color.clear, lineWidth: 2)
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct Metric: View {
+    let title: String
+    let value: String
+    let level: ExposureLevel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            Text(value).font(.subheadline.weight(.bold)).foregroundStyle(QSColor.level(level))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

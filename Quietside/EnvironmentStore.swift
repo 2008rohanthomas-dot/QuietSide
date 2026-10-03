@@ -14,13 +14,23 @@ final class EnvironmentStore {
     private(set) var overlays: [EnvironmentalLayer: [ExposureBandOverlay]] = [:]
     private(set) var weights = SensoryProfile.load().weights
 
-    /// Time source; the app uses the real clock.
-    @ObservationIgnored var clock: () -> Date = Date.init
+    /// Fixed time of day for previewing the event schedule; nil follows the real clock.
+    private(set) var timeOverride: Date?
+    /// Advances every 30 s so time-derived views refresh.
+    private(set) var tick = 0
     @ObservationIgnored private var loading: Task<EnvironmentalExposureModel?, Never>?
     @ObservationIgnored private var ticker: Task<Void, Never>?
     @ObservationIgnored private var overlayGeneration = 0
 
-    var now: Date { clock() }
+    var now: Date {
+        _ = tick
+        return timeOverride ?? Date()
+    }
+
+    func setTime(_ date: Date?) {
+        timeOverride = date
+        Task { await currentSnapshot() }
+    }
 
     /// The field for right now, loading it on first use.
     @discardableResult
@@ -42,6 +52,7 @@ final class EnvironmentStore {
         ticker = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
+                self?.tick += 1
                 await self?.currentSnapshot()
             }
         }

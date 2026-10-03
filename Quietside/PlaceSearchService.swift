@@ -8,6 +8,11 @@ final class PlaceSearchService {
     private(set) var isSearching = false
     private(set) var errorMessage: String?
 
+    func clear() {
+        results = []
+        errorMessage = nil
+    }
+
     func search(_ query: String, near location: CLLocation) async {
         let cleaned = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return }
@@ -21,8 +26,8 @@ final class PlaceSearchService {
         request.resultTypes = [.pointOfInterest, .address]
         request.region = MKCoordinateRegion(
             center: location.coordinate,
-            latitudinalMeters: 18_000,
-            longitudinalMeters: 18_000
+            latitudinalMeters: 12_000,
+            longitudinalMeters: 12_000
         )
 
         do {
@@ -39,10 +44,10 @@ final class PlaceSearchService {
                     longitude: coordinate.longitude
                 )
             }
-            if results.isEmpty { errorMessage = "No nearby places matched that search." }
+            if results.isEmpty { errorMessage = "No places found nearby." }
         } catch {
             results = []
-            errorMessage = "Search failed. Check your connection and try again."
+            errorMessage = "Search unavailable. Check your connection."
         }
     }
 }

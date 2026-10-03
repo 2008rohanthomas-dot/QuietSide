@@ -165,8 +165,29 @@ nonisolated struct RouteExposure: Sendable {
     let eventIds: [String]
     /// Overall exposure resampled at even intervals from start to destination.
     let profile: [Double]
+    /// Consecutive ~30 m pieces of the route with their environmental values, for drawing.
+    let segments: [RouteExposureSegment]
     /// Travel time plus weighted sensory penalties, in seconds.
     let cost: Double
+}
+
+/// One stretch of a route, valued on the same grids as the heatmap.
+nonisolated struct RouteExposureSegment: Sendable {
+    let coordinates: [CLLocationCoordinate2D]
+    /// Normalized 0…1 values.
+    let noise: Double
+    let crowd: Double
+    let traffic: Double
+    let overall: Double
+
+    func value(for layer: EnvironmentalLayer) -> Double {
+        switch layer {
+        case .overall: overall
+        case .noise: noise
+        case .crowd: crowd
+        case .traffic: traffic
+        }
+    }
 }
 
 nonisolated struct ExposureContourBand: Sendable {
@@ -501,7 +522,7 @@ nonisolated final class EnvironmentSnapshot: Sendable {
         guard points.count >= 2, totalLength > 0 else {
             return RouteExposure(averageNoiseDb: EnvironmentalWeights.ambientNoiseDb, peakNoiseDb: EnvironmentalWeights.ambientNoiseDb,
                                  averageCrowd: 0, averageTraffic: 0, averageVisual: 0, highExposureShare: 0,
-                                 intersections: [], eventIds: [], profile: [], cost: travelTime)
+                                 intersections: [], eventIds: [], profile: [], segments: [], cost: travelTime)
         }
 
         let spacing = EnvironmentalWeights.routeSampleSpacing
@@ -510,6 +531,21 @@ nonisolated final class EnvironmentSnapshot: Sendable {
         var high = 0, count = 0, cost = 0.0
         var overallValues: [Double] = []
         var eventIds = Set<String>()
+        var segments: [RouteExposureSegment] = []
+        var chunk: [SIMD2<Double>] = [points[0]]
+        var chunkSums = SIMD4<Double>(repeating: 0)
+        var chunkCount = 0
+        func closeChunk() {
+            guard chunkCount > 0, chunk.count >= 2 else { return }
+            let mean = chunkSums / Double(chunkCount)
+            segments.append(RouteExposureSegment(
+                coordinates: chunk.map(projection.coordinate),
+                noise: mean[0], crowd: mean[1], traffic: mean[2], overall: mean[3]
+            ))
+            chunk = [chunk[chunk.count - 1]]
+            chunkSums = SIMD4(repeating: 0)
+            chunkCount = 0
+        }
 
         for (a, b) in zip(points, points.dropFirst()) {
             let length = EnvironmentalExposureModel.length(b - a)
@@ -519,13 +555,19 @@ nonisolated final class EnvironmentSnapshot: Sendable {
             for step in 0..<steps {
                 let p = a + (b - a) * ((Double(step) + 0.5) / Double(steps))
                 let n = noise.value(at: p)
+                let c = crowd.value(at: p)
+                let t = traffic.value(at: p)
                 let penalty = penalty(at: p, weights)
                 let overall = weights.overall(penalty: penalty)
                 noiseSum += n
                 peakNoise = max(peakNoise, n)
-                crowdSum += crowd.value(at: p)
-                trafficSum += traffic.value(at: p)
+                crowdSum += c
+                trafficSum += t
                 visualSum += visual.value(at: p)
+                chunk.append(a + (b - a) * (Double(step + 1) / Double(steps)))
+                chunkSums += SIMD4(n, c, t, overall)
+                chunkCount += 1
+                if chunkCount >= 4 { closeChunk() }
                 if overall >= EnvironmentalWeights.highExposureThreshold { high += 1 }
                 overallValues.append(overall)
                 cost += stepLength * secondsPerMeter * (1 + penalty)
@@ -538,6 +580,7 @@ nonisolated final class EnvironmentSnapshot: Sendable {
                 }
             }
         }
+        closeChunk()
         let n = Double(max(count, 1))
 
         let binCount = 40
@@ -566,6 +609,7 @@ nonisolated final class EnvironmentSnapshot: Sendable {
             intersections: intersections,
             eventIds: activeEvents.map(\.id).filter(eventIds.contains),
             profile: profile,
+            segments: segments,
             cost: cost
         )
     }
